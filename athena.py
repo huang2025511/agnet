@@ -375,6 +375,9 @@ async def _interactive(app: AthenaApp) -> None:
         "clear": [
             r"清屏|清除屏幕|清理屏幕|clear|刷新屏幕",
         ],
+        "settings": [
+            r"设置|配置|修改设置|查看设置|更改|切换模型|改模型|改温度|开启|关闭|启用|禁用|把.*改|set.*to|change|configure",
+        ],
     }
 
     def _match_intent(text: str) -> Optional[str]:
@@ -387,6 +390,7 @@ async def _interactive(app: AthenaApp) -> None:
             "skills": "skills", "status": "status",
             "metrics": "metrics", "stats": "metrics",
             "dlq": "dlq", "bus": "bus", "clear": "clear",
+            "settings": "settings", "config": "settings",
         }
         if lower in exact_map:
             return exact_map[lower]
@@ -413,15 +417,16 @@ async def _interactive(app: AthenaApp) -> None:
             return
         if intent == "help":
             print("你可以用自然语言操作，也可以用精准命令：")
-            print("  退出/再见/bye     → 退出程序")
-            print("  帮助/怎么用/help  → 显示帮助")
-            print("  技能/你会什么     → 列出技能")
-            print("  状态/运行情况     → 系统状态")
-            print("  指标/统计/metrics → 性能指标")
-            print("  死信/失败事件/dlq → 死信队列")
-            print("  事件/总线/bus     → 事件总线")
-            print("  清屏/clear        → 清除屏幕")
-            print("  其他任何文字      → 与 AI 对话")
+            print("  退出/再见/bye       → 退出程序")
+            print("  帮助/怎么用/help    → 显示帮助")
+            print("  技能/你会什么       → 列出技能")
+            print("  状态/运行情况       → 系统状态")
+            print("  指标/统计/metrics   → 性能指标")
+            print("  死信/失败事件/dlq   → 死信队列")
+            print("  事件/总线/bus       → 事件总线")
+            print("  清屏/clear          → 清除屏幕")
+            print("  设置/配置/改模型    → 修改设置")
+            print("  其他任何文字        → 与 AI 对话")
             continue
         if intent == "skills":
             print("loaded:", ", ".join(app.skills.all_skill_ids()) or "(none)")
@@ -449,6 +454,12 @@ async def _interactive(app: AthenaApp) -> None:
             continue
         if intent == "clear":
             print("\033c", end="")
+            continue
+        if intent == "settings":
+            # 将设置请求路由到 settings 技能
+            from skills import _process_settings_command
+            result = _process_settings_command(line, app.config)
+            print(result)
             continue
         try:
             reply = await asyncio.wait_for(

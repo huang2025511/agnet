@@ -83,6 +83,8 @@ class SkillManager(Plugin):
         # MCP server list — declared in config; started lazily
         self._mcp_servers = cfg.get("mcp_servers", []) or []
         self._max_loaded_per_turn = cfg.get("max_skills_per_turn", self._max_loaded_per_turn)
+        # 保存 ctx 引用供 settings 技能使用
+        self._ctx_ref = ctx
         logger.info("skills loaded: %d", len(self._skills))
 
     # ---------------------------------------------------------- public
@@ -277,6 +279,51 @@ class SkillManager(Plugin):
             handler=save_note,
         ))
 
+        # ---------- 设置管理技能 ----------
+        async def settings_handler(args: Dict[str, Any]) -> str:
+            """通过自然语言读取或修改配置。
+
+            支持的操作：
+            - 读取: "查看模型" / "当前温度" / "show model"
+            - 修改: "把模型改成GPT-4" / "设置温度为0.7" / "开启Docker"
+            - 列出: "列出所有设置" / "show all settings"
+            """
+            import yaml
+            input_text = str(args.get("input", "")).strip()
+            if not input_text:
+                return "请说明要查看或修改的设置，例如：'查看模型'、'把温度改为0.7'"
+
+            # 获取运行时配置引用
+            ctx_ref = getattr(self, "_ctx_ref", None)
+            config = ctx_ref.config if ctx_ref else {}
+
+            result = _process_settings_command(input_text, config)
+            return result
+
+        self.register(Skill(
+            id="settings", title="Settings Manager",
+            description="读取或修改 Agent 配置（模型、温度、网关开关等）。"
+                        "示例：'查看当前模型'、'把温度改为0.7'、'开启Docker'、'列出所有设置'",
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "settings",
+                    "description": "读取或修改 Agent 配置设置",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "input": {
+                                "type": "string",
+                                "description": "设置操作描述，如 '查看模型' 或 '把温度改为0.7'",
+                            },
+                        },
+                        "required": ["input"],
+                    },
+                },
+            },
+            handler=settings_handler,
+        ))
+
 
 def _schema(name: str, description: str, required: List[str]) -> Dict[str, Any]:
     return {
@@ -291,3 +338,254 @@ def _schema(name: str, description: str, required: List[str]) -> Dict[str, Any]:
             },
         },
     }
+
+
+# ---------- 设置管理：自然语言配置读写 ----------
+
+# 配置键的中文/英文别名映射
+_SETTING_ALIASES: Dict[str, tuple] = {
+    # (yaml_path, value_type)
+    "模型": ("llm.primary_model", str),
+    "model": ("llm.primary_model", str),
+    "主模型": ("llm.primary_model", str),
+    "轻量模型": ("llm.lightweight_model", str),
+    "本地模型": ("llm.local_model", str),
+    "温度": ("llm.default_temperature", float),
+    "temperature": ("llm.default_temperature", float),
+    "最大token": ("llm.default_max_tokens", int),
+    "max_tokens": ("llm.default_max_tokens", int),
+    "超时": ("llm.timeout", int),
+    "timeout": ("llm.timeout", int),
+    "重试": ("llm.retries", int),
+    "retries": ("llm.retries", int),
+    "提供商": ("llm.primary_provider", str),
+    "provider": ("llm.primary_provider", str),
+    "日志级别": ("agent.log_level", str),
+    "log_level": ("agent.log_level", str),
+    "时区": ("agent.timezone", str),
+    "timezone": ("agent.timezone", str),
+    "数据目录": ("agent.data_dir", str),
+    # 网关开关
+    "web": ("gateways.web.enabled", bool),
+    "telegram": ("gateways.telegram.enabled", bool),
+    "企业微信": ("gateways.wecom.enabled", bool),
+    "wecom": ("gateways.wecom.enabled", bool),
+    "钉钉": ("gateways.dingtalk.enabled", bool),
+    "dingtalk": ("gateways.dingtalk.enabled", bool),
+    "飞书": ("gateways.feishu.enabled", bool),
+    "feishu": ("gateways.feishu.enabled", bool),
+    "discord": ("gateways.discord.enabled", bool),
+    "slack": ("gateways.slack.enabled", bool),
+    # 执行环境
+    "docker": ("execution.docker.enabled", bool),
+    "shell": ("execution.local_shell.enabled", bool),
+    "浏览器": ("execution.browser.enabled", bool),
+    "browser": ("execution.browser.enabled", bool),
+    "docker镜像": ("execution.docker.image", str),
+    "docker内存": ("execution.docker.memory_limit_mb", int),
+    # 记忆
+    "长期记忆": ("memory.long_term.enabled", bool),
+    "程序记忆": ("memory.procedural.enabled", bool),
+    "记忆衰减": ("memory.long_term.decay_enabled", bool),
+    # 路由
+    "路由": ("router.enabled", bool),
+    "上下文压缩": ("router.context_compression.enabled", bool),
+    "自进化": ("router.self_evolution.enabled", bool),
+    # 缓存
+    "缓存": ("llm_cache.enabled", bool),
+    "缓存大小": ("llm_cache.max_size", int),
+    "缓存时间": ("llm_cache.ttl_seconds", int),
+    # 多模态
+    "多模态": ("multimodal.enabled", bool),
+    "multimodal": ("multimodal.enabled", bool),
+    # 调度器
+    "调度器": ("scheduler.enabled", bool),
+    "scheduler": ("scheduler.enabled", bool),
+    # 安全
+    "加密": ("security.data_encryption.enabled", bool),
+    "审计日志": ("security.audit_log.enabled", bool),
+    # API
+    "api端口": ("rest.port", int),
+    "api_key": ("rest.api_key", str),
+}
+
+# 只读配置（不允许通过对话修改的敏感项）
+_READ_ONLY_KEYS = {"rest.api_key", "llm.api_keys"}
+
+
+def _get_nested(d: dict, path: str, default=None):
+    """按点分隔路径获取嵌套字典值。"""
+    keys = path.split(".")
+    current = d
+    for k in keys:
+        if isinstance(current, dict):
+            current = current.get(k, default)
+        else:
+            return default
+    return current
+
+
+def _set_nested(d: dict, path: str, value) -> None:
+    """按点分隔路径设置嵌套字典值。"""
+    keys = path.split(".")
+    current = d
+    for k in keys[:-1]:
+        if k not in current or not isinstance(current[k], dict):
+            current[k] = {}
+        current = current[k]
+    current[keys[-1]] = value
+
+
+def _parse_bool_value(text: str) -> Optional[bool]:
+    """从自然语言中解析布尔值。"""
+    t = text.lower().strip()
+    if t in {"true", "yes", "1", "on", "开", "开启", "启用", "打开", "打开", "是", "enable", "enabled"}:
+        return True
+    if t in {"false", "no", "0", "off", "关", "关闭", "禁用", "停用", "否", "disable", "disabled"}:
+        return False
+    return None
+
+
+def _parse_value(text: str, value_type: type):
+    """根据目标类型解析用户输入的值。"""
+    text = text.strip().strip("\"'").strip()
+    if value_type == bool:
+        v = _parse_bool_value(text)
+        if v is not None:
+            return v
+        return None
+    if value_type == int:
+        import re as _re
+        m = _re.search(r"-?\d+", text)
+        return int(m.group()) if m else None
+    if value_type == float:
+        import re as _re
+        m = _re.search(r"-?\d+\.?\d*", text)
+        return float(m.group()) if m else None
+    return text  # str
+
+
+def _process_settings_command(input_text: str, config: dict) -> str:
+    """解析自然语言设置命令，读取或修改配置。"""
+    import yaml
+
+    lower = input_text.lower()
+
+    # ---- 列出所有设置 ----
+    if re.search(r"列出|所有|全部|list|all|show.?all", lower):
+        lines = ["当前配置：\n"]
+        for alias, (path, _) in _SETTING_ALIASES.items():
+            if any(c.isascii() and c.isalpha() for c in alias) and any("\u4e00" <= c <= "\u9fff" for c in alias):
+                continue  # 跳过中英混合别名，避免重复
+            val = _get_nested(config, path, "(未设置)")
+            # 隐藏敏感值
+            if any(ro in path for ro in _READ_ONLY_KEYS) and isinstance(val, str) and len(val) > 8:
+                val = val[:4] + "****"
+            lines.append(f"  {alias} = {val}")
+        return "\n".join(lines)
+
+    # ---- 读取设置 ----
+    # 匹配 "查看模型" / "当前温度" / "show model" / "什么模型" / "模型是什么"
+    read_patterns = [
+        r"查看|查看一下|当前|显示|show|get|什么|是啥|是多少|是什么",
+    ]
+    is_read = any(re.search(p, lower) for p in read_patterns)
+
+    # ---- 修改设置 ----
+    # 匹配 "改成/改为/设置/设为/改成/切换/turn on/off/enable/disable/开启/关闭"
+    write_patterns = [
+        r"改成|改为|设置|设为|切换|修改|换成|调整|set|change|turn.?on|turn.?off|enable|disable|开启|关闭|启用|禁用|打开",
+    ]
+    is_write = any(re.search(p, lower) for p in write_patterns)
+
+    if not is_read and not is_write:
+        # 尝试推断：如果包含值，则是写操作；否则是读操作
+        is_write = bool(re.search(r"\d+|true|false|开|关|启用|禁用|on|off|yes|no", lower))
+
+    # 查找匹配的配置键
+    matched_alias = None
+    matched_path = None
+    matched_type = str
+    for alias, (path, vtype) in _SETTING_ALIASES.items():
+        if alias in lower or alias.lower() in lower:
+            matched_alias = alias
+            matched_path = path
+            matched_type = vtype
+            break
+
+    if matched_path is None:
+        # 模糊匹配：检查用户输入是否包含别名关键词
+        for alias, (path, vtype) in _SETTING_ALIASES.items():
+            # 对中文别名做子串匹配
+            if len(alias) >= 2 and alias in input_text:
+                matched_alias = alias
+                matched_path = path
+                matched_type = vtype
+                break
+            # 对英文别名做单词匹配
+            if alias.isascii() and re.search(r"\b" + re.escape(alias) + r"\b", lower):
+                matched_alias = alias
+                matched_path = path
+                matched_type = vtype
+                break
+
+    if matched_path is None:
+        return f"未识别的设置项。可设置的选项：{', '.join(a for a in _SETTING_ALIASES if any('\u4e00' <= c <= '\u9fff' for c in a))}"
+
+    # 只读检查
+    if is_write and any(ro in matched_path for ro in _READ_ONLY_KEYS):
+        return f"⚠️ {matched_alias} 是安全敏感项，请直接编辑配置文件修改。"
+
+    # ---- 执行读取 ----
+    if not is_write:
+        current_val = _get_nested(config, matched_path, "(未设置)")
+        if any(ro in matched_path for ro in _READ_ONLY_KEYS) and isinstance(current_val, str) and len(current_val) > 8:
+            current_val = current_val[:4] + "****"
+        return f"{matched_alias} = {current_val}"
+
+    # ---- 执行修改 ----
+    # 从用户输入中提取新值
+    # 策略：找到别名后面的内容作为值
+    value_text = ""
+    if matched_alias:
+        idx = lower.find(matched_alias.lower()) if matched_alias.isascii() else input_text.find(matched_alias)
+        if idx >= 0:
+            value_text = input_text[idx + len(matched_alias):].strip()
+            # 去掉连接词
+            for prefix in ["改成", "改为", "设置", "设为", "切换", "修改", "换成", "调整", "为", "成", "to", "=", "：", ":"]:
+                if value_text.lower().startswith(prefix):
+                    value_text = value_text[len(prefix):].strip()
+
+    if not value_text:
+        # 尝试从整句中提取值
+        for pat in [r"为\s*(.+)", r"成\s*(.+)", r"to\s+(.+)", r"=\s*(.+)"]:
+            m = re.search(pat, lower)
+            if m:
+                value_text = m.group(1).strip()
+                break
+
+    if not value_text:
+        return f"请指定 {matched_alias} 的新值。例如：'把{matched_alias}改为xxx'"
+
+    new_value = _parse_value(value_text, matched_type)
+    if new_value is None:
+        return f"无法解析值 '{value_text}'，期望类型：{matched_type.__name__}"
+
+    # 应用修改
+    _set_nested(config, matched_path, new_value)
+
+    # 持久化到配置文件
+    _save_config(config)
+
+    return f"已将 {matched_alias} 修改为 {new_value}"
+
+
+def _save_config(config: dict) -> None:
+    """将配置写回 YAML 文件。"""
+    import yaml
+    config_path = os.environ.get("ATHENA_CONFIG", "config/default_config.yaml")
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    except Exception as exc:
+        logger.warning("保存配置失败: %s", exc)

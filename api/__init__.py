@@ -184,6 +184,52 @@ class RESTAPIGateway(Plugin):
                 raise HTTPException(503, "llm not available")
             return _llm.clear_cache()
 
+        @app.get("/api/settings")
+        async def settings_get(key: Optional[str] = None, _: None = Header(None)):
+            """读取配置项。不传 key 则返回所有可配置项列表。"""
+            auth(_)
+            from skills import _SETTING_ALIASES, _get_nested, _READ_ONLY_KEYS
+            if key is None:
+                items = []
+                for alias, (path, _) in _SETTING_ALIASES.items():
+                    if any(c.isascii() and c.isalpha() for c in alias) and any("\u4e00" <= c <= "\u9fff" for c in alias):
+                        continue
+                    val = _get_nested(_ctx.config, path, None) if _ctx else None
+                    if any(ro in path for ro in _READ_ONLY_KEYS) and isinstance(val, str) and len(val) > 8:
+                        val = val[:4] + "****"
+                    items.append({"alias": alias, "path": path, "value": val})
+                return {"settings": items}
+            # 按 alias 或 path 查找
+            for alias, (path, _) in _SETTING_ALIASES.items():
+                if alias == key or path == key:
+                    val = _get_nested(_ctx.config, path, None) if _ctx else None
+                    if any(ro in path for ro in _READ_ONLY_KEYS) and isinstance(val, str) and len(val) > 8:
+                        val = val[:4] + "****"
+                    return {"alias": alias, "path": path, "value": val}
+            return {"error": f"unknown key: {key}"}
+
+        @app.post("/api/settings")
+        async def settings_set(body: dict, _: None = Header(None)):
+            """修改配置项。body: {"key": "模型", "value": "gpt-4o"}"""
+            auth(_)
+            from skills import _SETTING_ALIASES, _set_nested, _parse_value, _READ_ONLY_KEYS, _save_config
+            key = body.get("key", "")
+            value = body.get("value")
+            if not key or value is None:
+                raise HTTPException(400, "need key and value")
+            for alias, (path, vtype) in _SETTING_ALIASES.items():
+                if alias == key or path == key:
+                    if any(ro in path for ro in _READ_ONLY_KEYS):
+                        raise HTTPException(403, f"{alias} is read-only for security")
+                    parsed = _parse_value(str(value), vtype)
+                    if parsed is None:
+                        raise HTTPException(400, f"cannot parse value for type {vtype.__name__}")
+                    if _ctx:
+                        _set_nested(_ctx.config, path, parsed)
+                        _save_config(_ctx.config)
+                    return {"alias": alias, "path": path, "value": parsed, "saved": True}
+            raise HTTPException(404, f"unknown key: {key}")
+
         @app.exception_handler(Exception)
         async def all_exception(request: Request, exc: Exception):
             from starlette.exceptions import HTTPException as StarletteHTTPException
