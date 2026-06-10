@@ -161,17 +161,52 @@ gateways:
     callback_host: "0.0.0.0"
     callback_port: 18794
 
+  # 钉钉（DingTalk）
+  dingtalk:
+    enabled: false
+    # 模式选择: webhook（群机器人推送）| stream（企业内部应用收发消息）
+    mode: "webhook"
+    # --- webhook 模式 ---
+    # 群聊添加机器人后获取 Webhook URL
+    webhook_url: "${DINGTALK_WEBHOOK_URL}"
+    # 安全设置中的加签 Secret（可选但推荐）
+    secret: "${DINGTALK_SECRET}"
+    # --- stream 模式（需钉钉开发者后台配置）---
+    client_id: "${DINGTALK_CLIENT_ID}"
+    client_secret: "${DINGTALK_CLIENT_SECRET}"
+
+  # 飞书（Feishu / Lark）
+  feishu:
+    enabled: false
+    # 模式选择: webhook（群机器人推送）| app（自建应用收发消息）
+    mode: "webhook"
+    # --- webhook 模式 ---
+    # 群聊添加机器人后获取 Webhook URL
+    webhook_url: "${FEISHU_WEBHOOK_URL}"
+    # 安全设置中的签名 Secret（可选但推荐）
+    secret: "${FEISHU_SECRET}"
+    # --- app 模式（需飞书开发者后台配置）---
+    app_id: "${FEISHU_APP_ID}"
+    app_secret: "${FEISHU_APP_SECRET}"
+    verification_token: "${FEISHU_VERIFICATION_TOKEN}"
+    encrypt_key: "${FEISHU_ENCRYPT_KEY}"
+    callback_host: "0.0.0.0"
+    callback_port: 18795
+
   # Discord Bot
   discord:
     enabled: false
     bot_token: "${DISCORD_BOT_TOKEN}"
+    # 允许的频道 ID 列表，留空表示监听所有文本频道
     allowed_channels: []
 
-  # Slack
+  # Slack Bot
   slack:
     enabled: false
-    bot_token: "${SLACK_BOT_TOKEN}"
-    signing_secret: "${SLACK_SIGNING_SECRET}"
+    bot_token: "${SLACK_BOT_TOKEN}"        # xoxb-...
+    app_token: "${SLACK_APP_TOKEN}"        # xapp-... (Socket Mode, 可选)
+    # 允许的频道 ID 列表，留空表示监听所有已加入频道
+    allowed_channels: []
 
   # 跨平台会话继续（Hermes 特性）
   cross_platform_continue: true

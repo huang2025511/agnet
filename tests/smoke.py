@@ -29,7 +29,7 @@ def test_imports():
     from memory import MemoryPlugin, LongTermMemory, ProceduralMemory
     from skills import SkillManager
     from executors import ShellExecutor, DockerExecutor, BrowserExecutor
-    from gateways import CLIGateway, WebGateway, WeComGateway
+    from gateways import CLIGateway, WebGateway, WeComGateway, DingTalkGateway, FeishuGateway, DiscordGateway, SlackGateway
     from scheduler import SchedulerPlugin
     from multimodal import MultimodalPlugin
     from api import RESTAPIGateway
