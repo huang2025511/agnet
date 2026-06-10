@@ -207,8 +207,11 @@ class EventBus:
                 except asyncio.QueueEmpty:
                     break
             pending.sort(key=lambda e: -int(e.priority))
-            for e in pending:
+            for i, e in enumerate(pending):
                 await self._dispatch(e)
+                # periodically yield to prevent starving other coroutines
+                if (i + 1) % 50 == 0:
+                    await asyncio.sleep(0)
             await asyncio.sleep(0)
 
     async def _dispatch(self, event: Event) -> None:
@@ -254,13 +257,22 @@ class EventBus:
     def _track(self, event: Event) -> None:
         self._tracker[event.id] = event
         if len(self._tracker) > self._tracker_limit:
-            # Remove oldest done/failed events
+            # Remove oldest done/failed events in insertion order
             done_ids = [
                 eid for eid, e in self._tracker.items()
-                if e.status in (EventStatus.DONE, EventStatus.FAILED)
+                if e.status in (EventStatus.DONE, EventStatus.FAILED, EventStatus.DEAD_LETTER)
             ]
-            for eid in done_ids[: len(self._tracker) - self._tracker_limit + len(done_ids)]:
+            # tracker is a regular dict (insertion-ordered in py3.7+)
+            # remove from the front while keeping only the last _tracker_limit
+            excess = len(self._tracker) - self._tracker_limit
+            # Prefer evicting done/failed before evicting still-processing
+            victims = done_ids[:excess] if len(done_ids) >= excess else done_ids
+            for eid in victims:
                 del self._tracker[eid]
+            # If we still overflow (e.g. all events are in-flight), drop from front
+            while len(self._tracker) > self._tracker_limit:
+                oldest_id = next(iter(self._tracker))
+                del self._tracker[oldest_id]
 
     def get_tracked(self, event_id: str) -> Optional[Event]:
         return self._tracker.get(event_id)

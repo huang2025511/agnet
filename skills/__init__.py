@@ -181,6 +181,8 @@ class SkillManager(Plugin):
                     return (out.stdout or "") + (out.stderr or "")
                 except subprocess.TimeoutExpired:
                     return "[timeout]"
+                except (FileNotFoundError, PermissionError, OSError) as exc:
+                    return f"[command error: {exc}]"
             return f"(skill {title}) {m.group(2).strip()[:500]}\n\ninput: {input_text}"
 
         return Skill(skill_id, title, description, schema, handler, directory=str(path.parent))

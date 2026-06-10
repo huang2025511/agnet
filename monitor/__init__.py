@@ -105,8 +105,13 @@ class MonitoringPlugin(Plugin):
             # Read last 50 log lines
             log_lines = []
             log_path = Path(_ctx.config.get("agent", {}).get("data_dir", "./data")) / "logs" / "athena.log"
+            # Read last N log lines with size cap (avoid OOM on huge logs)
+            MAX_LOG_READ = 256 * 1024  # 256 KB max
             if log_path.exists():
-                lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+                raw = log_path.read_text(encoding="utf-8", errors="ignore")
+                if len(raw) > MAX_LOG_READ:
+                    raw = raw[-MAX_LOG_READ:]
+                lines = raw.splitlines()
                 log_lines = lines[-50:]
 
             return {
@@ -124,7 +129,11 @@ class MonitoringPlugin(Plugin):
             log_path = Path(_ctx.config.get("agent", {}).get("data_dir", "./data")) / "logs" / "athena.log"
             if not log_path.exists():
                 return {"lines": []}
-            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            MAX_LOG_READ = 256 * 1024
+            raw = log_path.read_text(encoding="utf-8", errors="ignore")
+            if len(raw) > MAX_LOG_READ:
+                raw = raw[-MAX_LOG_READ:]
+            lines = raw.splitlines()
             return {"lines": lines[-tail:]}
 
         self._app = app

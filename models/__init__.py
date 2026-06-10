@@ -82,17 +82,18 @@ class LLMCache:
         self._misses = 0
 
     @staticmethod
-    def _make_key(messages, model, tools) -> str:
+    def _make_key(messages, model, tools, temperature=None) -> str:
         import hashlib
         payload = json.dumps({
             "messages": messages,
             "model": model,
             "tools": tools,
+            "temperature": temperature,
         }, sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
-    def get(self, messages, model, tools=None) -> Optional[Dict[str, Any]]:
-        key = self._make_key(messages, model, tools)
+    def get(self, messages, model, tools=None, temperature=None) -> Optional[Dict[str, Any]]:
+        key = self._make_key(messages, model, tools, temperature)
         entry = self._store.get(key)
         if entry is None:
             self._misses += 1
@@ -107,8 +108,8 @@ class LLMCache:
         self._store.move_to_end(key)
         return entry.value
 
-    def set(self, messages, model, tools, value: Dict[str, Any]) -> None:
-        key = self._make_key(messages, model, tools)
+    def set(self, messages, model, tools, value: Dict[str, Any], temperature=None) -> None:
+        key = self._make_key(messages, model, tools, temperature)
         entry = _CacheEntry(value, self._ttl)
         if key in self._store:
             self._store.move_to_end(key)
@@ -218,12 +219,12 @@ class LLMProvider(Plugin):
         temperature = self._default_temperature if temperature is None else temperature
         max_tokens = self._default_max_tokens if max_tokens is None else max_tokens
 
-        # Try cache first
-        # Note: tools are included in cache key, so tool calls can also be cached
-        # This is useful for deterministic tools (calculator, echo) but may not be
-        # desired for stateful tools (weather, API calls)
+        # Try cache first.
+        # tools + temperature are both included in cache key, so different
+        # configs don't share entries.  For stateful tools (weather, API calls)
+        # callers should pass use_cache=False explicitly.
         if use_cache and self._cache is not None:
-            cached = self._cache.get(messages, model, tools)
+            cached = self._cache.get(messages, model, tools, temperature)
             if cached is not None:
                 logger.debug("cache hit for model=%s (tools=%s)", model, bool(tools))
                 return cached
@@ -246,15 +247,16 @@ class LLMProvider(Plugin):
                 result["estimated_cost_usd"] = round(cost, 6)
                 result["total_cost_usd"] = round(self._cost_total, 6)
 
-                # Store in cache
-                if use_cache and self._cache is not None and not tools:
-                    self._cache.set(messages, model, tools, result)
+                # Store in cache (tools included in key; stateful tools should use use_cache=False)
+                if use_cache and self._cache is not None:
+                    self._cache.set(messages, model, tools or [], result, temperature)
 
                 return result
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 logger.warning("llm call attempt %d failed: %s", attempt, exc)
-                await asyncio.sleep(1.2 * attempt)
+                if attempt < self._retry_count:
+                    await asyncio.sleep(1.2 * attempt)
 
         return {
             "text": f"[upstream unreachable: {last_err}]",

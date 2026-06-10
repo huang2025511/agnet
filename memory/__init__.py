@@ -156,6 +156,13 @@ class LongTermMemory:
     def vacuum(self) -> None:
         self._conn.execute("VACUUM")
 
+    def close(self) -> None:
+        """Close the SQLite connection (called from MemoryPlugin.stop)."""
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
 
 # ---------- tier 3: procedural memory (auto-generated skills) --------------
 class ProceduralMemory:
@@ -298,3 +305,12 @@ class MemoryPlugin(Plugin):
             "long_term": self._long.stats() if self._long else {},
             "procedural_skills": len(self._procedural.list()) if self._procedural else 0,
         }
+
+    async def stop(self) -> None:
+        # close SQLite connection to flush WAL and release file locks
+        if self._long is not None:
+            try:
+                self._long.close()
+            except Exception:
+                pass
+        await super().stop()

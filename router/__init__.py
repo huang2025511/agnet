@@ -70,6 +70,8 @@ class SmartRouter(Plugin):
         await super().setup(ctx)
         self._cfg = ctx.config.get("router", {}) or {}
         # LLM will be bound via bind_llm() call in AthenaApp.start()
+        self._session_history: Dict[str, Any] = {}
+        self._max_sessions = 500  # cap total sessions to prevent unbounded growth
         self.bus.subscribe("user_message", self._on_user_message)
         self.bus.subscribe("turn_completed", self._on_turn_completed)
         self.bus.subscribe("turn_completed", self._on_done)
@@ -129,6 +131,10 @@ class SmartRouter(Plugin):
         hist = self._session_history.setdefault(sid, [])
         hist.append({"input": turn.input_text, "reply": turn.result})
         self._session_history[sid] = hist[-20:]
+        # global cap: evict oldest session when total exceeds limit
+        if len(self._session_history) > self._max_sessions:
+            oldest_key = next(iter(self._session_history))
+            del self._session_history[oldest_key]
 
     # --------------------------------------------------------- internal
     def _classify(self, text: str) -> float:

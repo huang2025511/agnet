@@ -45,6 +45,22 @@ class MultimodalPlugin(Plugin):
             await self._client.aclose()
         await super().stop()
 
+    def _resolve_provider(self, model: str):
+        """Return (api_key, base_url) for the given model identifier."""
+        provider, model_name = model.split("/", 1) if "/" in model else ("openai", model)
+        api_key = (
+            self._api_keys.get(provider)
+            or self._api_keys.get("openrouter", "")
+            or self._api_keys.get("openai", "")
+        )
+        base_urls = {
+            "openrouter": "https://openrouter.ai/api/v1",
+            "openai": "https://api.openai.com/v1",
+            "anthropic": "https://api.anthropic.com",
+        }
+        base = base_urls.get(provider, "https://api.openai.com/v1")
+        return provider, model_name, api_key, base
+
     # --------------------------------------------------------- image generation
     async def generate_image(
         self,
@@ -62,9 +78,7 @@ class MultimodalPlugin(Plugin):
         if self._client is None:
             return {"error": "client not initialized"}
 
-        provider, model_name = model.split("/", 1) if "/" in model else ("openai", model)
-        api_key = self._api_keys.get(provider) or self._api_keys.get("openai", "")
-        base = "https://api.openai.com/v1"
+        provider, model_name, api_key, base = self._resolve_provider(model)
 
         try:
             resp = await self._client.post(
@@ -121,9 +135,7 @@ class MultimodalPlugin(Plugin):
             # Assume raw base64
             image_payload = {"data": f"data:image/png;base64,{image_data}"}
 
-        provider, model_name = model.split("/", 1) if "/" in model else ("openai", model)
-        api_key = self._api_keys.get(provider) or self._api_keys.get("openai", "")
-        base = "https://api.openai.com/v1"
+        provider, model_name, api_key, base = self._resolve_provider(model)
 
         try:
             resp = await self._client.post(
@@ -166,8 +178,7 @@ class MultimodalPlugin(Plugin):
         """Convert text to speech, returns base64-encoded audio."""
         if self._client is None:
             return {"error": "client not initialized"}
-        api_key = self._api_keys.get("openai", "")
-        base = "https://api.openai.com/v1"
+        _provider, _model_name, api_key, base = self._resolve_provider(model)
 
         try:
             resp = await self._client.post(

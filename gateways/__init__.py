@@ -164,11 +164,15 @@ class TelegramGateway(Plugin):
                 try:
                     await asyncio.wait_for(event.wait(), 120)
                     await self._send(chat_id, self._replies.get(session_id, "[no reply]"))
-                    # 清理 session 以避免内存泄漏
-                    self._sessions.pop(session_id, None)
-                    self._replies.pop(session_id, None)
                 except asyncio.TimeoutError:
-                    await self._send(chat_id, "[timeout]")
+                    try:
+                        await self._send(chat_id, "[timeout]")
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.exception("telegram send error for chat %s", chat_id)
+                finally:
+                    # always clean up to prevent memory leak regardless of outcome
                     self._sessions.pop(session_id, None)
                     self._replies.pop(session_id, None)
 
@@ -245,7 +249,9 @@ class WebGateway(Plugin):
 
         @app.get("/api/status")
         async def status():
-            return {"ok": True, "uptime": int(time.time() - (self.ctx.started_at if self.ctx else time.time()))}
+            if self.ctx is None:
+                return {"ok": False, "uptime": 0}
+            return {"ok": True, "uptime": int(time.time() - self.ctx.started_at)}
 
         config = uvicorn.Config(app, host=self._host, port=self._port, log_level="warning")
         server = uvicorn.Server(config)

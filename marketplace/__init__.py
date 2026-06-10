@@ -125,6 +125,9 @@ class MarketplacePlugin(Plugin):
             resp = await self._client.get(url)  # type: ignore[union-attr]
             resp.raise_for_status()
             content = resp.text
+            # prevent DoS: reject unreasonably large skill files (> 1 MB)
+            if len(content) > 1024 * 1024:
+                return {"ok": False, "error": f"skill too large ({len(content)} bytes, max 1 MB)"}
         except Exception as exc:
             return {"ok": False, "error": f"failed to fetch {url}: {exc}"}
 
@@ -135,6 +138,10 @@ class MarketplacePlugin(Plugin):
         spec = self._parse_front_matter(content, source)
         if spec is None:
             return {"ok": False, "error": "invalid skill format: missing YAML front-matter"}
+
+        # Basic sanity: reject content that looks like non-markdown binary
+        if len(content) < 10:
+            return {"ok": False, "error": "content too short to be a valid skill"}
 
         spec.checksum = checksum
         spec.raw_url = url

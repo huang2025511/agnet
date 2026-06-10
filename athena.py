@@ -15,6 +15,7 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -397,6 +398,24 @@ async def main() -> None:
         sys.exit(f"config not found: {cfg_path}")
     app = AthenaApp(cfg_path)
     await app.start()
+
+    # register graceful shutdown on SIGINT/SIGTERM
+    loop = asyncio.get_event_loop()
+    _shutdown_triggered = False
+
+    def _on_signal():
+        nonlocal _shutdown_triggered
+        if not _shutdown_triggered:
+            _shutdown_triggered = True
+            print("\n[shutting down...]")
+            asyncio.create_task(app.stop())
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except (NotImplementedError, OSError):
+            pass  # Windows or lack of signal support
+
     try:
         await _interactive(app)
     finally:

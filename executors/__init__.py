@@ -81,7 +81,7 @@ class ShellExecutor(Plugin):
         if not self._enabled:
             return False
         import re
-        if not re.fullmatch(r"[0-9a-zA-Z\s_./:@#\-='\"\-\?&*()\[\],]+", command.strip()):
+        if not re.fullmatch(r"[0-9a-zA-Z\s_./:@#\-='\"\\-]+", command.strip()):
             return False
         for name, pattern in ALLOWED_PATTERNS.items():
             if re.fullmatch(pattern, command.strip()):
@@ -200,6 +200,14 @@ class DockerExecutor(Plugin):
                 "stdout": "", "stderr": "docker executor disabled",
                 "returncode": -1, "blocked": False,
             }
+        # Use exec-form (argv) instead of shell-form to avoid container-internal
+        # shell interpretation.  The container is already heavily sandboxed
+        # (--network=none, --read-only, --cap-drop=all, non-root), but
+        # exec-form is still preferred as defense-in-depth.
+        try:
+            cmd_parts = shlex.split(command, posix=True)
+        except ValueError:
+            cmd_parts = ["/bin/sh", "-c", command]
         args = [
             "docker", "run", "--rm",
             f"--memory={self._mem_limit_mb}m",
@@ -211,8 +219,7 @@ class DockerExecutor(Plugin):
             "--security-opt=no-new-privileges",
             "--pids-limit=64",
             self._image,
-            "sh", "-c", command,
-        ]
+        ] + cmd_parts
         try:
             out = subprocess.run(args, capture_output=True, text=True, timeout=self._timeout)
             return {
