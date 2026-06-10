@@ -121,40 +121,49 @@ class Coordinator(Plugin):
             total_tokens += int(resp.get("tokens_used") or 0)
             tool_calls = resp.get("tool_calls") or []
             if not tool_calls:
+                # final text reply — record in message history so any next
+                # iteration sees consistent state (consistency matters when
+                # the loop is exhausted and we force a plain-text call)
                 final_text = resp.get("text", "") or ""
+                if final_text:
+                    messages.append({"role": "assistant", "content": final_text})
                 break
 
-            # run tool calls, feed results back as a "tool" role message
-            tool_results = []
             provider = turn.model.split("/")[0] if turn.model and "/" in turn.model else "openai"
 
-            for idx, tc in enumerate(tool_calls):
-                name = tc.get("name") or ""
-                args = tc.get("args") or {}
-                if self._skills is not None:
-                    result = await self._skills.dispatch(name, args)
-                else:
-                    result = "[no skill manager bound]"
-                tool_results.append({"role": "tool", "name": name, "content": str(result)})
-
-                if provider == "anthropic":
-                    # Claude: 只加 tool result
+            # Append the assistant's tool call request to message history
+            if provider == "anthropic":
+                # Claude: only tool results are needed; the model matches by tool_call_id
+                for idx, tc in enumerate(tool_calls):
+                    name = tc.get("name") or ""
+                    args = tc.get("args") or {}
+                    if self._skills is not None:
+                        result = await self._skills.dispatch(name, args)
+                    else:
+                        result = "[no skill manager bound]"
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id") or f"call_{idx}",
                         "content": str(result),
                     })
-                else:
-                    # OpenAI-compatible: assistant + tool pair
-                    messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [tc],
-                    })
+            else:
+                # OpenAI-compatible: single assistant message with all tool_calls, then one tool result per call
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls,
+                })
+                for tc in tool_calls:
+                    name = tc.get("name") or ""
+                    args = tc.get("args") or {}
+                    if self._skills is not None:
+                        result = await self._skills.dispatch(name, args)
+                    else:
+                        result = "[no skill manager bound]"
                     messages.append({
                         "role": "tool",
-                        "tool_call_id": tc.get("id") or f"call_{idx}",
-                        "name": tc.get("name"),
+                        "tool_call_id": tc.get("id") or "",
+                        "name": name,
                         "content": str(result),
                     })
 

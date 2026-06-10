@@ -199,7 +199,8 @@ class LLMProvider(Plugin):
     def model_for_tier(self, tier: str) -> str:
         for model in MODEL_TIERS.get(tier, []):
             provider = model.split("/", 1)[0]
-            if self._api_keys.get(provider):
+            # Accept a direct provider key OR an openrouter key (openrouter routes to anthropic/...)
+            if self._api_keys.get(provider) or self._api_keys.get("openrouter"):
                 return model
         return self._default_model
 

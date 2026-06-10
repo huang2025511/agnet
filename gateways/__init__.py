@@ -53,8 +53,8 @@ class CLIGateway(Plugin):
                 print()
                 return
             except KeyboardInterrupt:
-                print()
-                continue
+                print("\n(interrupted)")
+                return
             line = line.strip()
             if not line:
                 continue
@@ -163,8 +163,13 @@ class TelegramGateway(Plugin):
                 try:
                     await asyncio.wait_for(event.wait(), 120)
                     await self._send(chat_id, self._replies.get(session_id, "[no reply]"))
+                    # 清理 session 以避免内存泄漏
+                    self._sessions.pop(session_id, None)
+                    self._replies.pop(session_id, None)
                 except asyncio.TimeoutError:
                     await self._send(chat_id, "[timeout]")
+                    self._sessions.pop(session_id, None)
+                    self._replies.pop(session_id, None)
 
     async def _send(self, chat_id: int, text: str) -> None:
         if not self._client or not self._token:

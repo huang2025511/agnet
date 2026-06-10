@@ -347,8 +347,8 @@ async def _interactive(app: AthenaApp) -> None:
             print()
             return
         except KeyboardInterrupt:
-            print()
-            continue
+            print("\n(interrupted)")
+            return
         if not line:
             continue
         cmd = line.lower()

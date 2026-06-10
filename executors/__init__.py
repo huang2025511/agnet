@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -80,6 +81,8 @@ class ShellExecutor(Plugin):
         if not self._enabled:
             return False
         import re
+        if not re.fullmatch(r"[0-9a-zA-Z\s_./:@#\-='\"\-\?&*()\[\],]+", command.strip()):
+            return False
         for name, pattern in ALLOWED_PATTERNS.items():
             if re.fullmatch(pattern, command.strip()):
                 return True
@@ -118,10 +121,19 @@ class ShellExecutor(Plugin):
             self._audit(command, result)
             return result
 
+        # parse safely without invoking a shell
+        try:
+            args = shlex.split(command, posix=True)
+        except ValueError as exc:
+            result = {"stdout": "", "stderr": f"[parse error: {exc}]", "returncode": -3, "blocked": False}
+            if audit:
+                self._audit(command, result)
+            return result
+
         try:
             out = subprocess.run(
-                command,
-                shell=True,
+                args,
+                shell=False,
                 cwd=self._workdir,
                 timeout=timeout or self._timeout,
                 capture_output=True,

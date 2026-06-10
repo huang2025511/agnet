@@ -209,11 +209,30 @@ class SkillManager(Plugin):
         ))
 
         async def calc_handler(args: Dict[str, Any]) -> str:
+            import ast
+            import operator
             expr = str(args.get("input", "")).strip()
             if not re.fullmatch(r"[0-9+\-*/(). ]+", expr):
                 return "[invalid math expression]"
+            _ops = {
+                ast.Add: operator.add, ast.Sub: operator.sub,
+                ast.Mult: operator.mul, ast.Div: operator.truediv,
+                ast.Pow: operator.pow, ast.USub: operator.neg,
+                ast.UAdd: operator.pos,
+            }
+            def _eval(node):
+                if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                    return node.value
+                if isinstance(node, ast.Num):  # py<3.8 compat
+                    return node.n
+                if isinstance(node, ast.BinOp):
+                    return _ops[type(node.op)](_eval(node.left), _eval(node.right))
+                if isinstance(node, ast.UnaryOp):
+                    return _ops[type(node.op)](_eval(node.operand))
+                raise ValueError(f"unsupported node: {type(node).__name__}")
             try:
-                return str(eval(expr, {"__builtins__": {}}, {}))
+                tree = ast.parse(expr, mode="eval")
+                return str(_eval(tree.body))
             except Exception as exc:  # noqa: BLE001
                 return f"[math error: {exc}]"
         self.register(Skill(
@@ -224,13 +243,19 @@ class SkillManager(Plugin):
         ))
 
         async def save_note(args: Dict[str, Any]) -> str:
+            import fcntl
             text = str(args.get("input", ""))
             target = Path(self._builtin_dir or "./data/skills/builtin") / "user_notes.log"
             target.parent.mkdir(parents=True, exist_ok=True)
             ts = datetime.datetime.now().isoformat(timespec="seconds")
-            target.write_text(target.read_text(encoding="utf-8", errors="ignore") + f"\n[{ts}] {text}\n",
-                              encoding="utf-8")
-            return f"saved note ({len(text)} chars) to {target}"
+            # 追加模式更安全——避免读-改-写
+            with open(target, "a", encoding="utf-8") as f:
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    f.write(f"[{ts}] {text}\n")
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            return "note saved"
         self.register(Skill(
             id="save_note", title="Save note",
             description="Append a note to a persistent log file.",

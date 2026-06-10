@@ -58,6 +58,7 @@ class SmartRouter(Plugin):
         self._cfg: Dict[str, Any] = {}
         self._history: List[Dict[str, Any]] = []
         self._llm: LLMProvider | None = None
+        self._session_history: Dict[str, Any] = {}
         # running accuracy counters per-tier (for self-evolution)
         self._tier_stats: Dict[str, Dict[str, int]] = {
             t: {"picked": 0, "rerouted_up": 0, "rerouted_down": 0}
@@ -71,6 +72,7 @@ class SmartRouter(Plugin):
         # LLM will be bound via bind_llm() call in AthenaApp.start()
         self.bus.subscribe("user_message", self._on_user_message)
         self.bus.subscribe("turn_completed", self._on_turn_completed)
+        self.bus.subscribe("turn_completed", self._on_done)
         logger.info("router configured (compression=%s, self_evo=%s)",
                     self._cfg.get("context_compression", {}).get("enabled", True),
                     self._cfg.get("self_evolution", {}).get("enabled", True))
@@ -118,6 +120,15 @@ class SmartRouter(Plugin):
         # TODO: dynamic threshold adjustment — keep a rolling mean of
         # "failures per tier" and bump up complexity thresholds when a tier
         # sees repeated failures.  Good enough for OSS v1.
+
+    async def _on_done(self, event: Event) -> None:
+        turn: TurnContext | None = event.get("turn")
+        if turn is None:
+            return
+        sid = turn.session_id
+        hist = self._session_history.setdefault(sid, [])
+        hist.append({"input": turn.input_text, "reply": turn.result})
+        self._session_history[sid] = hist[-20:]
 
     # --------------------------------------------------------- internal
     def _classify(self, text: str) -> float:

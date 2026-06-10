@@ -191,9 +191,6 @@ class PluginManager:
             visited.add(p.name)
             ordered.append(p)
 
-        for p in plugins:
+        for p in sorted(plugins, key=lambda pp: -pp.load_priority):
             visit(p, set())
-
-        # Secondary sort: load_priority descending
-        ordered.sort(key=lambda p: -p.load_priority)
         return ordered

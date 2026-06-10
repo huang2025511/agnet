@@ -65,6 +65,10 @@ class Event:
     processed_at: Optional[float] = None
     error: Optional[str] = None
 
+    def __post_init__(self):
+        if self.priority is None:
+            self.priority = EventPriority.NORMAL
+
     def __getitem__(self, key: str) -> Any:
         return self.payload[key]
 
@@ -154,6 +158,7 @@ class EventBus:
                 payload=event.get("payload", {}),
                 source=event.get("source", "bus"),
                 context_id=event.get("context_id"),
+                priority=event.get("priority"),
             )
         else:
             evt = event
