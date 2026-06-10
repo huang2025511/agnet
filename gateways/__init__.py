@@ -24,6 +24,33 @@ from core.plugin import Plugin
 logger = logging.getLogger(__name__)
 
 
+# ---------- 自然语言意图匹配 ----------
+_CLI_INTENT_PATTERNS = {
+    "exit": [r"退出|再见|拜拜|结束|关闭|退出程序|再见啦|bye|goodbye|see you"],
+    "help": [r"帮助|怎么用|使用说明|能做什么|有什么功能|help|命令列表|功能列表|怎么操作|使用方法"],
+    "status": [r"状态|运行状态|当前状态|系统状态|运行情况|status|还好吗|活着吗|运行多久"],
+    "clear": [r"清屏|清除屏幕|清理屏幕|clear|刷新屏幕"],
+}
+
+
+def _match_cli_intent(text: str) -> Optional[str]:
+    """从自然语言中匹配 CLI 意图。精准命令优先，然后模糊匹配。"""
+    import re
+    lower = text.lower().strip()
+    exact = {
+        "exit": "exit", "quit": "exit", "q": "exit",
+        "help": "help", "?": "help",
+        "status": "status", "clear": "clear",
+    }
+    if lower in exact:
+        return exact[lower]
+    for intent, patterns in _CLI_INTENT_PATTERNS.items():
+        for pat in patterns:
+            if re.search(pat, lower):
+                return intent
+    return None
+
+
 # ------------- CLI --------------------------------------------------------
 class CLIGateway(Plugin):
     """Line-based interactive terminal interface."""
@@ -45,7 +72,7 @@ class CLIGateway(Plugin):
     async def run_loop(self, send_to_agent) -> None:
         """Run the interactive REPL.  ``send_to_agent(text)`` should be an
         async function that triggers the agent pipeline."""
-        print("Athena agent — type 'exit' to quit, 'help' for commands.")
+        print("Athena agent — 自然语言即可操作，输入 '帮助' 查看功能。")
         while True:
             try:
                 line = input(self._prompt)
@@ -58,15 +85,21 @@ class CLIGateway(Plugin):
             line = line.strip()
             if not line:
                 continue
-            if line in {"quit", "exit", "q"}:
+            intent = _match_cli_intent(line)
+            if intent == "exit":
                 return
-            if line in {"help", "?"}:
-                print("commands: exit | status | clear")
+            if intent == "help":
+                print("你可以用自然语言操作，也可以用精准命令：")
+                print("  退出/再见/bye     → 退出程序")
+                print("  帮助/怎么用/help  → 显示帮助")
+                print("  状态/运行情况     → 系统状态")
+                print("  清屏/clear        → 清除屏幕")
+                print("  其他任何文字      → 与 AI 对话")
                 continue
-            if line == "status":
+            if intent == "status":
                 print(f"session {self._session_id} up {int(time.monotonic())}s")
                 continue
-            if line == "clear":
+            if intent == "clear":
                 print("\033c", end="")
                 continue
             self._reply_available = asyncio.Event()

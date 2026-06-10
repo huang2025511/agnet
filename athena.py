@@ -344,9 +344,58 @@ class AthenaApp:
 
 async def _interactive(app: AthenaApp) -> None:
     print()
-    print("╔══════════════════════════════════════════╗")
-    print("║  Athena v2 — enter a message, or 'exit'  ║")
-    print("╚══════════════════════════════════════════╝")
+    print("╔══════════════════════════════════════════════╗")
+    print("║  Athena v2 — 自然语言即可操作，输入 '帮助'   ║")
+    print("╚══════════════════════════════════════════════╝")
+
+    # ---------- 自然语言意图匹配 ----------
+    # 用户无需记住精准命令，用自然语言即可触发内置功能
+    _INTENT_PATTERNS = {
+        "exit": [
+            r"退出|再见|拜拜|结束|关闭|退出程序|再见啦|bye|goodbye|see you",
+        ],
+        "help": [
+            r"帮助|怎么用|使用说明|能做什么|有什么功能|help|命令列表|功能列表|怎么操作|使用方法",
+        ],
+        "skills": [
+            r"技能|会什么|能做什么|有哪些能力|有什么技能|skill|能力列表|你会啥|你会什么",
+        ],
+        "status": [
+            r"状态|运行状态|当前状态|系统状态|运行情况|status|还好吗|活着吗|运行多久",
+        ],
+        "metrics": [
+            r"指标|统计|性能|调用量|token|用量|metrics|stats|统计数据|性能指标|使用量",
+        ],
+        "dlq": [
+            r"死信|失败事件|未处理|错误队列|死信队列|dlq|dead.?letter|失败的消息",
+        ],
+        "bus": [
+            r"事件|总线|event.?bus|事件类型|总线状态|bus",
+        ],
+        "clear": [
+            r"清屏|清除屏幕|清理屏幕|clear|刷新屏幕",
+        ],
+    }
+
+    def _match_intent(text: str) -> Optional[str]:
+        """从自然语言中匹配用户意图，返回命令名或 None。"""
+        import re
+        lower = text.lower().strip()
+        exact_map = {
+            "exit": "exit", "quit": "exit", "q": "exit",
+            "help": "help", "?": "help",
+            "skills": "skills", "status": "status",
+            "metrics": "metrics", "stats": "metrics",
+            "dlq": "dlq", "bus": "bus", "clear": "clear",
+        }
+        if lower in exact_map:
+            return exact_map[lower]
+        for intent, patterns in _INTENT_PATTERNS.items():
+            for pat in patterns:
+                if re.search(pat, lower):
+                    return intent
+        return None
+
     session_id = "cli-session"
     while True:
         try:
@@ -359,35 +408,47 @@ async def _interactive(app: AthenaApp) -> None:
             return
         if not line:
             continue
-        cmd = line.lower()
-        if cmd in {"exit", "quit", "q"}:
+        intent = _match_intent(line)
+        if intent == "exit":
             return
-        if cmd in {"help", "?"}:
-            print("Commands: exit | skills | status | stats | metrics | dlq | bus")
+        if intent == "help":
+            print("你可以用自然语言操作，也可以用精准命令：")
+            print("  退出/再见/bye     → 退出程序")
+            print("  帮助/怎么用/help  → 显示帮助")
+            print("  技能/你会什么     → 列出技能")
+            print("  状态/运行情况     → 系统状态")
+            print("  指标/统计/metrics → 性能指标")
+            print("  死信/失败事件/dlq → 死信队列")
+            print("  事件/总线/bus     → 事件总线")
+            print("  清屏/clear        → 清除屏幕")
+            print("  其他任何文字      → 与 AI 对话")
             continue
-        if cmd == "skills":
+        if intent == "skills":
             print("loaded:", ", ".join(app.skills.all_skill_ids()) or "(none)")
             continue
-        if cmd == "status":
+        if intent == "status":
             print("memory:", app.memory.stats() if app.memory else {})
             print("llm:", app.llm.stats() if app.llm else {})
             print("bus:", app.bus.metrics() if app.bus else {})
             continue
-        if cmd == "metrics":
+        if intent == "metrics":
             print("bus metrics:", app.bus.metrics())
             print("llm calls:", app.llm.stats() if app.llm else {})
             print("skills loaded:", app.skills.all_skill_ids())
             print("uptime:", app.ctx.uptime() if app.ctx else 0)
             continue
-        if cmd == "dlq":
+        if intent == "dlq":
             dlq = app.bus.get_dlq(10)
             print(f"dead-letter queue ({len(dlq)} items):")
             for e in dlq:
                 print(f"  [{e.id}] {e.type} from {e.source}")
             continue
-        if cmd == "bus":
+        if intent == "bus":
             print("event types registered:")
             print("  (use bus.metrics() for full stats)")
+            continue
+        if intent == "clear":
+            print("\033c", end="")
             continue
         try:
             reply = await asyncio.wait_for(
