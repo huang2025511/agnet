@@ -33,7 +33,7 @@ def _expand_env(obj):
         def repl(m):
             val = os.environ.get(m.group(1), "")
             return val if val else m.group(0)
-        return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", repl, obj)
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", repl, obj)
     if isinstance(obj, dict):
         return {k: _expand_env(v) for k, v in obj.items()}
     if isinstance(obj, list):

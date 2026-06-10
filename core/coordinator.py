@@ -51,7 +51,7 @@ class Coordinator(Plugin):
     # ------------------------------------------------------------ handlers
     async def _on_routed(self, event: Event) -> None:
         turn: TurnContext | None = event.get("turn")
-        if turn is None or turn.result is not None:
+        if turn is None or turn.result is not None or turn.error is not None:
             return
         # avoid double-processing — if something already published a reply,
         # skip this turn entirely
@@ -95,7 +95,10 @@ class Coordinator(Plugin):
                 "\n\nRelevant past interactions (use them to keep context):\n"
                 + turn.meta["memory_snippets"]
             )
-            messages[-1] = {"role": "user", "content": turn.input_text + mem_note}
+            if messages:
+                messages[-1] = {"role": "user", "content": turn.input_text + mem_note}
+            else:
+                messages.append({"role": "user", "content": turn.input_text + mem_note})
 
         # pick skills for this turn (lazy loading — tier-3)
         tools: List[Dict[str, Any]] = []

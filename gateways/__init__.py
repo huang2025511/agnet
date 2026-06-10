@@ -153,13 +153,14 @@ class TelegramGateway(Plugin):
                 event = asyncio.Event()
                 self._sessions[session_id] = event
                 # dispatch — we rely on something to call into the agent
-                self.ctx.bus.publish({  # type: ignore[attr-defined]
-                    "type": "external_message",
-                    "source": "telegram",
-                    "session_id": session_id,
-                    "text": text,
-                    "chat_id": chat_id,
-                })
+                if self.bus is not None:
+                    self.bus.publish({
+                        "type": "external_message",
+                        "source": "telegram",
+                        "session_id": session_id,
+                        "text": text,
+                        "chat_id": chat_id,
+                    })
                 try:
                     await asyncio.wait_for(event.wait(), 120)
                     await self._send(chat_id, self._replies.get(session_id, "[no reply]"))

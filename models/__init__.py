@@ -254,7 +254,7 @@ class LLMProvider(Plugin):
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 logger.warning("llm call attempt %d failed: %s", attempt, exc)
-                time.sleep(1.2 * attempt)
+                await asyncio.sleep(1.2 * attempt)
 
         return {
             "text": f"[upstream unreachable: {last_err}]",

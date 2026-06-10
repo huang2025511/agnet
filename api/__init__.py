@@ -85,7 +85,7 @@ class RESTAPIGateway(Plugin):
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
-            allow_credentials=True,
+            allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -103,7 +103,9 @@ class RESTAPIGateway(Plugin):
 
         @app.get("/api/health")
         async def health():
-            return {"status": "ok", "uptime": int(time.time() - (_ctx.started_at if _ctx else time.time()))}
+            if _ctx is None:
+                return {"status": "not_ready", "uptime": 0}
+            return {"status": "ok", "uptime": int(time.time() - _ctx.started_at)}
 
         @app.get("/api/stats")
         async def stats():
@@ -184,6 +186,9 @@ class RESTAPIGateway(Plugin):
 
         @app.exception_handler(Exception)
         async def all_exception(request: Request, exc: Exception):
+            from starlette.exceptions import HTTPException as StarletteHTTPException
+            if isinstance(exc, StarletteHTTPException):
+                raise exc
             logger.exception("api error: %s", exc)
             return JSONResponse({"error": str(exc)}, status_code=500)
 

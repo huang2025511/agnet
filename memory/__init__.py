@@ -94,7 +94,15 @@ class LongTermMemory:
                 "ORDER BY timestamp DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             )
-            rows = [(r[0], r[1], r[2], r[3], 0) + (r[4] if len(r) > 4 else 1.0,) for r in c.fetchall()]
+            rows = c.fetchall()
+            # normalize rows: (content, source, tags, timestamp, rank, weight)
+            normalized = []
+            for r in rows:
+                content, source, tags, timestamp = r[0], r[1], r[2], r[3]
+                rank = r[4] if len(r) > 4 else 0
+                weight = r[5] if len(r) > 5 else 1.0
+                normalized.append((content, source, tags, timestamp, rank, weight))
+            rows = normalized
 
         results = []
         for row in rows:

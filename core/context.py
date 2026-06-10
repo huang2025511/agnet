@@ -81,6 +81,9 @@ class AgentContext:
     # counters used for self-evolution statistics
     counters: Dict[str, int] = field(default_factory=dict)
 
+    # plugin registry populated from top-level assembly
+    _plugins: List[Any] = field(default_factory=list)
+
     def bump(self, name: str, by: int = 1) -> None:
         self.counters[name] = self.counters.get(name, 0) + by
 

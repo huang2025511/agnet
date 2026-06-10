@@ -66,7 +66,11 @@ class SchedulerPlugin(Plugin):
     def add_cron(self, cron: str, func: Callable[..., Any], name: str) -> None:
         if self._scheduler is None:
             return
-        minute, hour, day, month, day_of_week = cron.split()
+        parts = cron.split()
+        if len(parts) != 5:
+            logger.error("invalid cron expression '%s': expected 5 fields, got %d", cron, len(parts))
+            return
+        minute, hour, day, month, day_of_week = parts
         self._scheduler.add_job(
             func, "cron",
             minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week,

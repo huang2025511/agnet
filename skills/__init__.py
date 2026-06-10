@@ -168,10 +168,15 @@ class SkillManager(Plugin):
         async def handler(args: Dict[str, Any]) -> str:
             input_text = args.get("input", "")
             if command:
-                resolved = command.replace("{input}", input_text)
+                # shlex.quote 把用户输入转义为安全的单个参数
+                import shlex
+                safe_input = shlex.quote(input_text)
+                resolved = command.replace("{input}", safe_input)
                 try:
+                    # 解析为列表参数，使用 shell=False 避免 shell 注入
+                    cmd_parts = shlex.split(resolved, posix=True)
                     out = subprocess.run(
-                        resolved, shell=True, capture_output=True, text=True, timeout=30
+                        cmd_parts, shell=False, capture_output=True, text=True, timeout=30
                     )
                     return (out.stdout or "") + (out.stderr or "")
                 except subprocess.TimeoutExpired:
@@ -243,18 +248,25 @@ class SkillManager(Plugin):
         ))
 
         async def save_note(args: Dict[str, Any]) -> str:
-            import fcntl
+            # 跨平台文件锁：fcntl 在 Windows 不可用，降级为无锁
+            try:
+                import fcntl
+                _has_fcntl = True
+            except ImportError:
+                _has_fcntl = False
             text = str(args.get("input", ""))
             target = Path(self._builtin_dir or "./data/skills/builtin") / "user_notes.log"
             target.parent.mkdir(parents=True, exist_ok=True)
             ts = datetime.datetime.now().isoformat(timespec="seconds")
-            # 追加模式更安全——避免读-改-写
             with open(target, "a", encoding="utf-8") as f:
-                try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                if _has_fcntl:
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                        f.write(f"[{ts}] {text}\n")
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                else:
                     f.write(f"[{ts}] {text}\n")
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             return "note saved"
         self.register(Skill(
             id="save_note", title="Save note",

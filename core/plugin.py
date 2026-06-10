@@ -80,6 +80,7 @@ def _collect_from_module(
             and issubclass(attr, Plugin)
             and attr is not Plugin
             and attr not in seen
+            and attr.__name__ not in exclude_set
         ):
             seen.add(attr)
             pm.register(attr())

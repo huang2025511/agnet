@@ -150,7 +150,7 @@ def _expand_env(obj):
         def repl(m):
             val = os.environ.get(m.group(1), "")
             return val if val else m.group(0)
-        return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", repl, obj)
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", repl, obj)
     if isinstance(obj, dict):
         return {k: _expand_env(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -292,7 +292,7 @@ class AthenaApp:
             bus=self.bus,
             data_dir=self.config.agent.data_dir,
         )
-        self.ctx._plugins = [  # type: ignore[attr-defined]
+        self.ctx._plugins = [
             self.llm, self.router, self.history, self.memory, self.skills,
             self.exec_shell, self.exec_docker, self.exec_browser,
             self.coordinator, self.scheduler,
