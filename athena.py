@@ -237,9 +237,6 @@ class AthenaApp:
     """Top-level assembly: builds plugin manager, coordinates plugins."""
 
     def __init__(self, config_path: str) -> None:
-        self.config = load_config(config_path)
-        setup_logging(self.config)  # type: ignore[arg-type]
-
         from core.events import EventBus
         from core.coordinator import Coordinator
         from models import LLMProvider
@@ -253,6 +250,9 @@ class AthenaApp:
         from api import RESTAPIGateway
         from monitor import MonitoringPlugin
         from marketplace import MarketplacePlugin
+
+        self.config = load_config(config_path)
+        setup_logging(self.config)  # type: ignore[arg-type]
 
         self.bus = EventBus()
 

@@ -221,26 +221,20 @@ class EventBus:
             self._metrics["dead_lettered"] += 1
             return
 
-        errors: List[str] = []
+        handler_errors: List[str] = []
         for handler in handlers:
             try:
                 result = handler(event)
                 if asyncio.iscoroutine(result):
                     await result
             except Exception:
-                err_msg = f"handler {handler} failed on {event.type}"
-                logger.exception(err_msg)
-                errors.append(err_msg)
+                logger.exception("handler %s failed on %s", handler, event.type)
+                handler_errors.append(str(handler))
                 self._metrics["errors"] += 1
 
-        if errors:
-            # Only mark as failed if ALL handlers failed
-            if len(errors) == len(handlers):
-                event.mark_failed(", ".join(errors))
-            else:
-                # Some handlers succeeded — mark as done but record partial errors
-                event.mark_done()
-                event.error = f"{len(errors)}/{len(handlers)} handlers failed"
+        # 只有所有 handler 都失败才标记
+        if handler_errors and len(handler_errors) == len(handlers):
+            event.mark_failed("; ".join(handler_errors))
         else:
             event.mark_done()
 

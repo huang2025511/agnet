@@ -68,7 +68,7 @@ class SmartRouter(Plugin):
     async def setup(self, ctx) -> None:
         await super().setup(ctx)
         self._cfg = ctx.config.get("router", {}) or {}
-        self._llm = None  # set via bind_llm() after plugin setup
+        # LLM will be bound via bind_llm() call in AthenaApp.start()
         self.bus.subscribe("user_message", self._on_user_message)
         self.bus.subscribe("turn_completed", self._on_turn_completed)
         logger.info("router configured (compression=%s, self_evo=%s)",
