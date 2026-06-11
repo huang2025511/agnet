@@ -188,23 +188,25 @@ class RESTAPIGateway(Plugin):
         async def settings_get(key: Optional[str] = None, _: None = Header(None)):
             """读取配置项。不传 key 则返回所有可配置项列表。"""
             auth(_)
-            from skills import _SETTING_ALIASES, _get_nested, _READ_ONLY_KEYS
+            from skills import _SETTING_ALIASES, _get_nested, _SENSITIVE_KEYS, _is_sensitive_write_allowed
+            sensitive_allowed = _is_sensitive_write_allowed(_ctx.config) if _ctx else False
             if key is None:
                 items = []
                 for alias, (path, _) in _SETTING_ALIASES.items():
                     if any(c.isascii() and c.isalpha() for c in alias) and any("\u4e00" <= c <= "\u9fff" for c in alias):
                         continue
                     val = _get_nested(_ctx.config, path, None) if _ctx else None
-                    if any(ro in path for ro in _READ_ONLY_KEYS) and isinstance(val, str) and len(val) > 8:
-                        val = val[:4] + "****"
+                    if any(sk in path for sk in _SENSITIVE_KEYS) and isinstance(val, str) and len(val) > 8:
+                        if not sensitive_allowed:
+                            val = val[:4] + "****"
                     items.append({"alias": alias, "path": path, "value": val})
                 return {"settings": items}
-            # 按 alias 或 path 查找
             for alias, (path, _) in _SETTING_ALIASES.items():
                 if alias == key or path == key:
                     val = _get_nested(_ctx.config, path, None) if _ctx else None
-                    if any(ro in path for ro in _READ_ONLY_KEYS) and isinstance(val, str) and len(val) > 8:
-                        val = val[:4] + "****"
+                    if any(sk in path for sk in _SENSITIVE_KEYS) and isinstance(val, str) and len(val) > 8:
+                        if not sensitive_allowed:
+                            val = val[:4] + "****"
                     return {"alias": alias, "path": path, "value": val}
             return {"error": f"unknown key: {key}"}
 
@@ -212,15 +214,16 @@ class RESTAPIGateway(Plugin):
         async def settings_set(body: dict, _: None = Header(None)):
             """修改配置项。body: {"key": "模型", "value": "gpt-4o"}"""
             auth(_)
-            from skills import _SETTING_ALIASES, _set_nested, _parse_value, _READ_ONLY_KEYS, _save_config
+            from skills import _SETTING_ALIASES, _set_nested, _parse_value, _SENSITIVE_KEYS, _is_sensitive_write_allowed, _save_config
             key = body.get("key", "")
             value = body.get("value")
             if not key or value is None:
                 raise HTTPException(400, "need key and value")
             for alias, (path, vtype) in _SETTING_ALIASES.items():
                 if alias == key or path == key:
-                    if any(ro in path for ro in _READ_ONLY_KEYS):
-                        raise HTTPException(403, f"{alias} is read-only for security")
+                    if any(sk in path for sk in _SENSITIVE_KEYS):
+                        if not _is_sensitive_write_allowed(_ctx.config if _ctx else {}):
+                            raise HTTPException(403, f"{alias} is sensitive — enable security.allow_sensitive_chat_settings to modify via API")
                     parsed = _parse_value(str(value), vtype)
                     if parsed is None:
                         raise HTTPException(400, f"cannot parse value for type {vtype.__name__}")

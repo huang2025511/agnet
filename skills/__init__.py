@@ -407,10 +407,18 @@ _SETTING_ALIASES: Dict[str, tuple] = {
     # API
     "api端口": ("rest.port", int),
     "api_key": ("rest.api_key", str),
+    # 安全
+    "允许聊天改密钥": ("security.allow_sensitive_chat_settings", bool),
+    "allow_sensitive": ("security.allow_sensitive_chat_settings", bool),
 }
 
-# 只读配置（不允许通过对话修改的敏感项）
-_READ_ONLY_KEYS = {"rest.api_key", "llm.api_keys"}
+# 敏感配置（默认不允许通过对话修改，受 security.allow_sensitive_chat_settings 控制）
+_SENSITIVE_KEYS = {"rest.api_key", "llm.api_keys"}
+
+
+def _is_sensitive_write_allowed(config: dict) -> bool:
+    """检查是否允许通过对话修改敏感配置。"""
+    return bool(_get_nested(config, "security.allow_sensitive_chat_settings", False))
 
 
 def _get_nested(d: dict, path: str, default=None):
@@ -474,13 +482,15 @@ def _process_settings_command(input_text: str, config: dict) -> str:
     # ---- 列出所有设置 ----
     if re.search(r"列出|所有|全部|list|all|show.?all", lower):
         lines = ["当前配置：\n"]
+        sensitive_allowed = _is_sensitive_write_allowed(config)
         for alias, (path, _) in _SETTING_ALIASES.items():
             if any(c.isascii() and c.isalpha() for c in alias) and any("\u4e00" <= c <= "\u9fff" for c in alias):
                 continue  # 跳过中英混合别名，避免重复
             val = _get_nested(config, path, "(未设置)")
-            # 隐藏敏感值
-            if any(ro in path for ro in _READ_ONLY_KEYS) and isinstance(val, str) and len(val) > 8:
-                val = val[:4] + "****"
+            # 敏感值脱敏
+            if any(sk in path for sk in _SENSITIVE_KEYS) and isinstance(val, str) and len(val) > 8:
+                if not sensitive_allowed:
+                    val = val[:4] + "****"
             lines.append(f"  {alias} = {val}")
         return "\n".join(lines)
 
@@ -532,15 +542,25 @@ def _process_settings_command(input_text: str, config: dict) -> str:
     if matched_path is None:
         return f"未识别的设置项。可设置的选项：{', '.join(a for a in _SETTING_ALIASES if any('\u4e00' <= c <= '\u9fff' for c in a))}"
 
-    # 只读检查
-    if is_write and any(ro in matched_path for ro in _READ_ONLY_KEYS):
-        return f"⚠️ {matched_alias} 是安全敏感项，请直接编辑配置文件修改。"
+    # 敏感项写入检查
+    if is_write and any(sk in matched_path for sk in _SENSITIVE_KEYS):
+        if not _is_sensitive_write_allowed(config):
+            return (
+                f"⚠️ {matched_alias} 是安全敏感项，默认不允许在聊天中修改。\n"
+                f"如需开启此功能，请设置 security.allow_sensitive_chat_settings: true\n"
+                f"或直接编辑配置文件 config/default_config.yaml"
+            )
+        # 允许修改但显示警告
+        logger.warning("用户通过聊天修改敏感配置: %s", matched_path)
 
     # ---- 执行读取 ----
     if not is_write:
         current_val = _get_nested(config, matched_path, "(未设置)")
-        if any(ro in matched_path for ro in _READ_ONLY_KEYS) and isinstance(current_val, str) and len(current_val) > 8:
-            current_val = current_val[:4] + "****"
+        # 敏感值脱敏：未开启 allow_sensitive_chat_settings 时隐藏
+        if any(sk in matched_path for sk in _SENSITIVE_KEYS):
+            if isinstance(current_val, str) and len(current_val) > 8:
+                if not _is_sensitive_write_allowed(config):
+                    current_val = current_val[:4] + "****"
         return f"{matched_alias} = {current_val}"
 
     # ---- 执行修改 ----
