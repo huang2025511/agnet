@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any, Dict, List, Optional
 
 from core.context import TurnContext
@@ -75,8 +74,12 @@ class Coordinator(Plugin):
         # publishes turn_routed which eventually reaches _on_routed above.
         self.publish("user_message", turn=turn, session_id=turn.session_id)
         # wait until turn.result is populated — small polling loop
-        deadline = time.time() + 120
-        while time.time() < deadline:
+        # Use the event loop's monotonic clock (loop.time()) instead of
+        # time.time(): wall-clock can jump backward on NTP slew and break
+        # the deadline calculation.
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 120
+        while loop.time() < deadline:
             if turn.result is not None or turn.error is not None:
                 break
             await asyncio.sleep(0.1)
@@ -134,21 +137,38 @@ class Coordinator(Plugin):
 
             provider = turn.model.split("/")[0] if turn.model and "/" in turn.model else "openai"
 
-            # Append the assistant's tool call request to message history
+            # Append the assistant's tool call + tool results to message history.
+            # OpenAI-compatible APIs and Anthropic use different schemas — see
+            # below.  The two branches MUST stay in sync with the corresponding
+            # request/response parsers in models.LLMProvider._do_call().
             if provider == "anthropic":
-                # Claude: only tool results are needed; the model matches by tool_call_id
+                # Anthropic: assistant message with content blocks of type
+                # "tool_use", followed by a user message with content blocks
+                # of type "tool_result".  Anthropic does NOT accept
+                # role="tool" or the OpenAI "tool_calls" array.
+                assistant_content: List[Dict[str, Any]] = []
+                tool_result_blocks: List[Dict[str, Any]] = []
                 for idx, tc in enumerate(tool_calls):
+                    tc_id = tc.get("id") or f"toolu_{idx}"
                     name = tc.get("name") or ""
                     args = tc.get("args") or {}
                     if self._skills is not None:
                         result = await self._skills.dispatch(name, args)
                     else:
                         result = "[no skill manager bound]"
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id") or f"call_{idx}",
+                    assistant_content.append({
+                        "type": "tool_use",
+                        "id": tc_id,
+                        "name": name,
+                        "input": args,
+                    })
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
                         "content": str(result),
                     })
+                messages.append({"role": "assistant", "content": assistant_content})
+                messages.append({"role": "user", "content": tool_result_blocks})
             else:
                 # OpenAI-compatible: single assistant message with all tool_calls, then one tool result per call
                 messages.append({

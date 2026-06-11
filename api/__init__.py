@@ -19,6 +19,7 @@ All endpoints return JSON.  Authentication via X-API-Key header
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -33,7 +34,11 @@ logger = logging.getLogger(__name__)
 def _check_auth(api_key: Optional[str], required_key: str) -> bool:
     if not required_key:
         return True  # Auth disabled if no key configured
-    return api_key == required_key
+    if not api_key:
+        return False
+    # Timing-safe comparison: avoids leaking the key length / position via
+    # response time differences when an attacker probes the API.
+    return secrets.compare_digest(api_key, required_key)
 
 
 class RESTAPIGateway(Plugin):
@@ -70,7 +75,7 @@ class RESTAPIGateway(Plugin):
         if not self._enabled:
             return
         try:
-            from fastapi import FastAPI, HTTPException, Header, Request
+            from fastapi import FastAPI, HTTPException, Header, Request, Depends
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse
         except ImportError:
@@ -97,8 +102,14 @@ class RESTAPIGateway(Plugin):
         _skills = next((p for p in (_ctx._plugins if _ctx else []) if getattr(p, "name", "") == "skills"), None) if _ctx else None
         _bus = _ctx.bus if _ctx else None
 
-        def auth(x_api_key: Optional[str] = Header(None)) -> None:
-            if self._api_key and x_api_key != self._api_key:
+        def auth(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) -> None:
+            # FastAPI dependency: extract the X-API-Key header (case-insensitive)
+            # and validate via the timing-safe helper.  Endpoints declare
+            # `Depends(auth)` so auth runs *before* the endpoint body — the
+            # previous nested-function design only checked auth inside the
+            # body, but the endpoints' `_` parameter was incorrectly typed as
+            # `None`, so the real key never reached the checker.
+            if not _check_auth(x_api_key, self._api_key):
                 raise HTTPException(401, "Invalid API key")
 
         @app.get("/api/health")
@@ -126,8 +137,7 @@ class RESTAPIGateway(Plugin):
             }
 
         @app.post("/api/chat")
-        async def chat(body: dict, _: None = Header(None)):
-            auth(_)
+        async def chat(body: dict, _auth: None = Depends(auth)):
             text = body.get("text", "")
             session_id = body.get("session_id", uuid.uuid4().hex[:12])
             if _agent is None:
@@ -140,17 +150,15 @@ class RESTAPIGateway(Plugin):
             q: str,
             limit: int = 5,
             offset: int = 0,
-            _: None = Header(None),
+            _auth: None = Depends(auth),
         ):
-            auth(_)
             if _memory is None:
                 raise HTTPException(503, "memory not available")
             results = _memory.search_facts(q, limit=limit, offset=offset)
             return {"query": q, "results": results, "limit": limit, "offset": offset}
 
         @app.post("/api/memory/add")
-        async def memory_add(body: dict, _: None = Header(None)):
-            auth(_)
+        async def memory_add(body: dict, _auth: None = Depends(auth)):
             if _memory is None:
                 raise HTTPException(503, "memory not available")
             text = body.get("text", "")
@@ -163,31 +171,27 @@ class RESTAPIGateway(Plugin):
         async def memory_page(
             page: int = 1,
             page_size: int = 20,
-            _: None = Header(None),
+            _auth: None = Depends(auth),
         ):
-            auth(_)
             if _memory is None:
                 raise HTTPException(503, "memory not available")
             return _memory._long.paginate(page=page, page_size=page_size)  # type: ignore[union-attr]
 
         @app.get("/api/skills")
-        async def skills_list(_: None = Header(None)):
-            auth(_)
+        async def skills_list(_auth: None = Depends(auth)):
             if _skills is None:
                 raise HTTPException(503, "skills not available")
             return {"skills": _skills.all_skill_ids()}
 
         @app.post("/api/cache/clear")
-        async def cache_clear(_: None = Header(None)):
-            auth(_)
+        async def cache_clear(_auth: None = Depends(auth)):
             if _llm is None:
                 raise HTTPException(503, "llm not available")
             return _llm.clear_cache()
 
         @app.get("/api/settings")
-        async def settings_get(key: Optional[str] = None, _: None = Header(None)):
+        async def settings_get(key: Optional[str] = None, _auth: None = Depends(auth)):
             """读取配置项。不传 key 则返回所有可配置项列表。"""
-            auth(_)
             from skills import _SETTING_ALIASES, _get_nested, _SENSITIVE_KEYS, _is_sensitive_write_allowed
             sensitive_allowed = _is_sensitive_write_allowed(_ctx.config) if _ctx else False
             if key is None:
@@ -211,9 +215,8 @@ class RESTAPIGateway(Plugin):
             return {"error": f"unknown key: {key}"}
 
         @app.post("/api/settings")
-        async def settings_set(body: dict, _: None = Header(None)):
+        async def settings_set(body: dict, _auth: None = Depends(auth)):
             """修改配置项。body: {"key": "模型", "value": "gpt-4o"}"""
-            auth(_)
             from skills import _SETTING_ALIASES, _set_nested, _parse_value, _SENSITIVE_KEYS, _is_sensitive_write_allowed, _save_config
             key = body.get("key", "")
             value = body.get("value")

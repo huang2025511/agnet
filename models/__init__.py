@@ -84,10 +84,14 @@ class LLMCache:
     @staticmethod
     def _make_key(messages, model, tools, temperature=None) -> str:
         import hashlib
+        # Normalize tools to a list so None / missing / [] all hash identically.
+        # Without this, the same call could write under key for `[]` and read
+        # under key for `null` (or vice versa), silently breaking the cache.
+        normalized_tools = tools or []
         payload = json.dumps({
             "messages": messages,
             "model": model,
-            "tools": tools,
+            "tools": normalized_tools,
             "temperature": temperature,
         }, sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:32]

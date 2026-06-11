@@ -115,8 +115,12 @@ class LongTermMemory:
                 age_hours = (time.time() - timestamp) / 3600
                 w *= self._decay_factor ** min(age_hours / 24, 30)  # cap at 30 days
             # FTS5 bm25 rank is negative (more negative = more relevant).
-            # A match always has rank < 0; filter by negative threshold.
-            if rank < 0 or not query:
+            # A match always has rank < 0. Use |rank| as the relevance score
+            # and apply the configured threshold: callers asking for stricter
+            # filtering should set a higher value (typical bm25 magnitudes
+            # for a useful match are 1.0–10.0; default config uses 0.6 which
+            # is permissive).
+            if rank < 0 and (relevance_threshold <= 0.0 or abs(rank) >= relevance_threshold):
                 results.append({
                     "content": content,
                     "source": source,
