@@ -246,7 +246,7 @@ class OneAgentApp:
         from core.events import EventBus
         from core.coordinator import Coordinator
         from models import LLMProvider
-        from router import SmartRouter, HistoryRecorder
+        from router import SmartRouter
         from memory import MemoryPlugin
         from skills import SkillManager
         from executors import ShellExecutor, DockerExecutor, BrowserExecutor
@@ -264,7 +264,6 @@ class OneAgentApp:
 
         self.llm = LLMProvider()
         self.router = SmartRouter()
-        self.history = HistoryRecorder()
         self.memory = MemoryPlugin()
         self.skills = SkillManager()
         self.exec_shell = ShellExecutor()
@@ -287,7 +286,7 @@ class OneAgentApp:
 
         self._pm = PluginManager()
         for p in (
-            self.llm, self.router, self.history, self.memory, self.skills,
+            self.llm, self.router, self.memory, self.skills,
             self.exec_shell, self.exec_docker, self.exec_browser,
             self.coordinator, self.scheduler,
             self.cli, self.telegram, self.wecom, self.dingtalk, self.feishu,
@@ -305,7 +304,7 @@ class OneAgentApp:
             data_dir=self.config.agent.data_dir,
         )
         self.ctx._plugins = [
-            self.llm, self.router, self.history, self.memory, self.skills,
+            self.llm, self.router, self.memory, self.skills,
             self.exec_shell, self.exec_docker, self.exec_browser,
             self.coordinator, self.scheduler,
             self.cli, self.telegram, self.wecom, self.dingtalk, self.feishu,

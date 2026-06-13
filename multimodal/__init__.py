@@ -211,4 +211,4 @@ class MultimodalPlugin(Plugin):
         """Analyze multiple images in parallel."""
         import asyncio
         tasks = [self.analyze_image(img, prompt, model) for img in images]
-        return await asyncio.gather(*tasks)
+        return await asyncio.gather(*tasks, return_exceptions=True)

@@ -62,6 +62,7 @@ class ShellExecutor(Plugin):
         self._timeout = 60
         self._workdir = "./data/workspace"
         self._audit_log_path = "./data/logs/executor_audit.log"
+        self._patterns = ALLOWED_PATTERNS
 
     async def setup(self, ctx) -> None:
         await super().setup(ctx)
@@ -69,12 +70,20 @@ class ShellExecutor(Plugin):
         self._enabled = bool(cfg.get("enabled", False))
         self._timeout = int(cfg.get("default_timeout", 60))
         self._workdir = cfg.get("workdir", self._workdir)
+        # Merge config-level allowed_commands with built-in patterns
+        allowed_commands = cfg.get("allowed_commands", [])
+        if allowed_commands:
+            self._patterns = dict(ALLOWED_PATTERNS)
+            for cmd in allowed_commands:
+                self._patterns[cmd] = rf"^{cmd}\s+[\w./-]+(\s+[\w./=-]+)*$"
+        else:
+            self._patterns = ALLOWED_PATTERNS
         Path(self._workdir).mkdir(parents=True, exist_ok=True)
         Path(self._audit_log_path).parent.mkdir(parents=True, exist_ok=True)
         logger.info(
             "shell executor enabled=%s patterns=%d",
             self._enabled,
-            len(ALLOWED_PATTERNS),
+            len(self._patterns),
         )
 
     def can_run(self, command: str) -> bool:
@@ -83,7 +92,7 @@ class ShellExecutor(Plugin):
         import re
         if not re.fullmatch(r"[0-9a-zA-Z\s_./:@#\-='\"\\-]+", command.strip()):
             return False
-        for name, pattern in ALLOWED_PATTERNS.items():
+        for name, pattern in self._patterns.items():
             if re.fullmatch(pattern, command.strip()):
                 return True
         return False
@@ -202,7 +211,7 @@ class DockerExecutor(Plugin):
         # Basic safety: only allow printable ASCII with common shell-safe chars
         if not re.fullmatch(r"[0-9a-zA-Z\s_./:@#\-='\"\\-]+", command.strip()):
             return False
-        for name, pattern in ALLOWED_PATTERNS.items():
+        for name, pattern in self._patterns.items():
             if re.fullmatch(pattern, command.strip()):
                 return True
         return False

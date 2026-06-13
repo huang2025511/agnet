@@ -79,12 +79,15 @@ class MarketplacePlugin(Plugin):
         self._install_dir: Optional[str] = None
         self._skills_plugin = None
         self._timeout = 30
+        self._community_hub = COMMUNITY_HUB_URL
 
     async def setup(self, ctx) -> None:
         await super().setup(ctx)
+        cfg = ctx.config.get("marketplace") or {}
         data_dir = ctx.config.get("agent", {}).get("data_dir", "./data")
         self._registry_path = os.path.join(data_dir, "marketplace", "registry.json")
         self._install_dir = os.path.join(data_dir, "skills", "community")
+        self._community_hub = cfg.get("community_hub", COMMUNITY_HUB_URL)
         Path(self._registry_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self._install_dir).mkdir(parents=True, exist_ok=True)
         self._client = httpx.AsyncClient(timeout=self._timeout)
@@ -190,7 +193,7 @@ class MarketplacePlugin(Plugin):
         """Search available skills from the community hub."""
         if not self._client:
             return []
-        url = f"{COMMUNITY_HUB_URL}registry.json"
+        url = f"{self._community_hub}registry.json"
         try:
             resp = await self._client.get(url)
             resp.raise_for_status()

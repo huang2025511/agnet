@@ -144,7 +144,7 @@ class RESTAPIGateway(Plugin):
         @app.post("/api/chat")
         async def chat(body: dict, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
             auth(x_api_key)
-            text = body.get("text", "")
+            text = body.get("text") or body.get("message", "")
             session_id = body.get("session_id", uuid.uuid4().hex[:12])
             if _agent is None:
                 raise HTTPException(503, "agent not ready")

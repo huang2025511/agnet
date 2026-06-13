@@ -46,7 +46,9 @@ class SchedulerPlugin(Plugin):
         if not self._enabled or not _HAS_AP:
             logger.info("scheduler disabled (has_apscheduler=%s)", _HAS_AP)
             return
-        self._scheduler = AsyncIOScheduler(timezone=cfg.get("timezone"))
+        self._scheduler = AsyncIOScheduler(
+            timezone=cfg.get("timezone") or ctx.config.get("agent", {}).get("timezone")
+        )
         for job in cfg.get("builtin_jobs", []) or []:
             if not job.get("enabled", True):
                 continue
