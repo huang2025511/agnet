@@ -87,5 +87,12 @@ class AgentContext:
     def bump(self, name: str, by: int = 1) -> None:
         self.counters[name] = self.counters.get(name, 0) + by
 
+    def get_plugin(self, name: str):
+        """Return the first plugin registered with the given name, or None."""
+        for p in self._plugins:
+            if getattr(p, "name", "") == name:
+                return p
+        return None
+
     def uptime(self) -> float:
         return time.time() - self.started_at

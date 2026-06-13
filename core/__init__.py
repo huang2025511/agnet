@@ -5,7 +5,6 @@ Microkernel event-driven architecture.
 
 from .events import EventBus, Event, EventPriority
 from .context import AgentContext, TurnContext
-from .agent import AthenaAgent
 from .plugin import Plugin, PluginManager
 
 __all__ = [
@@ -14,7 +13,6 @@ __all__ = [
     "EventPriority",
     "AgentContext",
     "TurnContext",
-    "AthenaAgent",
     "Plugin",
     "PluginManager",
 ]

@@ -90,14 +90,30 @@ class RESTAPIGateway(Plugin):
             allow_headers=["*"],
         )
 
+        # Simple in-process rate limiter (per-IP, sliding window)
+        _rate_buckets: Dict[str, list] = {}
+        _rate_limit = int((cfg if (cfg := ctx.config.get("rest") or {}) else {}).get("rate_limit_per_minute", 60))
+
+        @app.middleware("http")
+        async def rate_limit_middleware(request, call_next):
+            ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            bucket = _rate_buckets.setdefault(ip, [])
+            # evict entries older than 60s
+            bucket[:] = [t for t in bucket if now - t < 60]
+            if len(bucket) >= _rate_limit:
+                return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
+            bucket.append(now)
+            return await call_next(request)
+
         _agent = self._agent_callback
         _ctx = self.ctx
-        _llm = next((p for p in (_ctx._plugins if _ctx else []) if getattr(p, "name", "") == "llm"), None) if _ctx else None
-        _memory = next((p for p in (_ctx._plugins if _ctx else []) if getattr(p, "name", "") == "memory"), None) if _ctx else None
-        _skills = next((p for p in (_ctx._plugins if _ctx else []) if getattr(p, "name", "") == "skills"), None) if _ctx else None
+        _llm = _ctx.get_plugin("llm") if _ctx else None
+        _memory = _ctx.get_plugin("memory") if _ctx else None
+        _skills = _ctx.get_plugin("skills") if _ctx else None
         _bus = _ctx.bus if _ctx else None
 
-        def auth(x_api_key: Optional[str] = Header(None)) -> None:
+        def auth(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) -> None:
             if self._api_key and x_api_key != self._api_key:
                 raise HTTPException(401, "Invalid API key")
 
@@ -126,8 +142,8 @@ class RESTAPIGateway(Plugin):
             }
 
         @app.post("/api/chat")
-        async def chat(body: dict, _: None = Header(None)):
-            auth(_)
+        async def chat(body: dict, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+            auth(x_api_key)
             text = body.get("text", "")
             session_id = body.get("session_id", uuid.uuid4().hex[:12])
             if _agent is None:
@@ -140,17 +156,17 @@ class RESTAPIGateway(Plugin):
             q: str,
             limit: int = 5,
             offset: int = 0,
-            _: None = Header(None),
+            x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
         ):
-            auth(_)
+            auth(x_api_key)
             if _memory is None:
                 raise HTTPException(503, "memory not available")
             results = _memory.search_facts(q, limit=limit, offset=offset)
             return {"query": q, "results": results, "limit": limit, "offset": offset}
 
         @app.post("/api/memory/add")
-        async def memory_add(body: dict, _: None = Header(None)):
-            auth(_)
+        async def memory_add(body: dict, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+            auth(x_api_key)
             if _memory is None:
                 raise HTTPException(503, "memory not available")
             text = body.get("text", "")
@@ -163,31 +179,31 @@ class RESTAPIGateway(Plugin):
         async def memory_page(
             page: int = 1,
             page_size: int = 20,
-            _: None = Header(None),
+            x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
         ):
-            auth(_)
+            auth(x_api_key)
             if _memory is None:
                 raise HTTPException(503, "memory not available")
             return _memory._long.paginate(page=page, page_size=page_size)  # type: ignore[union-attr]
 
         @app.get("/api/skills")
-        async def skills_list(_: None = Header(None)):
-            auth(_)
+        async def skills_list(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+            auth(x_api_key)
             if _skills is None:
                 raise HTTPException(503, "skills not available")
             return {"skills": _skills.all_skill_ids()}
 
         @app.post("/api/cache/clear")
-        async def cache_clear(_: None = Header(None)):
-            auth(_)
+        async def cache_clear(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+            auth(x_api_key)
             if _llm is None:
                 raise HTTPException(503, "llm not available")
             return _llm.clear_cache()
 
         @app.get("/api/settings")
-        async def settings_get(key: Optional[str] = None, _: None = Header(None)):
+        async def settings_get(key: Optional[str] = None, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
             """读取配置项。不传 key 则返回所有可配置项列表。"""
-            auth(_)
+            auth(x_api_key)
             from skills import _SETTING_ALIASES, _get_nested, _SENSITIVE_KEYS, _is_sensitive_write_allowed
             sensitive_allowed = _is_sensitive_write_allowed(_ctx.config) if _ctx else False
             if key is None:
@@ -211,9 +227,9 @@ class RESTAPIGateway(Plugin):
             return {"error": f"unknown key: {key}"}
 
         @app.post("/api/settings")
-        async def settings_set(body: dict, _: None = Header(None)):
+        async def settings_set(body: dict, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
             """修改配置项。body: {"key": "模型", "value": "gpt-4o"}"""
-            auth(_)
+            auth(x_api_key)
             from skills import _SETTING_ALIASES, _set_nested, _parse_value, _SENSITIVE_KEYS, _is_sensitive_write_allowed, _save_config
             key = body.get("key", "")
             value = body.get("value")
