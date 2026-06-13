@@ -191,7 +191,7 @@ class SmartRouter(Plugin):
         ``max_tokens`` on the *output* side, which keeps each turn cheap.
         """
         system = (
-            "You are Athena, a concise, helpful agent.  Answer the user's "
+            "You are One-Agent, a concise, helpful agent.  Answer the user's "
             "question directly.  If you must use tools, call them; otherwise "
             "just reply in plain text.  Keep answers compact."
         )

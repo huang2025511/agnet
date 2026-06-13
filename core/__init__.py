@@ -1,4 +1,4 @@
-"""Athena Agent Core Package.
+"""One-Agent Core Package.
 
 Microkernel event-driven architecture.
 """

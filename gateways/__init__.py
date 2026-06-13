@@ -72,7 +72,7 @@ class CLIGateway(Plugin):
     async def run_loop(self, send_to_agent) -> None:
         """Run the interactive REPL.  ``send_to_agent(text)`` should be an
         async function that triggers the agent pipeline."""
-        print("Athena agent — 自然语言即可操作，输入 '帮助' 查看功能。")
+        print("One-Agent — 自然语言即可操作，输入 '帮助' 查看功能。")
         while True:
             try:
                 line = input(self._prompt)

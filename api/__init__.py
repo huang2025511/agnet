@@ -78,9 +78,9 @@ class RESTAPIGateway(Plugin):
             return
 
         app = FastAPI(
-            title="Athena Agent API",
+            title="One-Agent API",
             version="2.0.0",
-            description="REST API for Athena Agent integration",
+            description="REST API for One-Agent integration",
         )
         app.add_middleware(
             CORSMiddleware,

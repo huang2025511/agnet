@@ -1,4 +1,4 @@
-"""Top-level Athena agent bootstrap.
+"""Top-level One-Agent bootstrap.
 
 Wires up every subsystem, then hands control to the CLI gateway or the web
 UI.  Run with ``python athena.py`` (or ``python -m athena``).

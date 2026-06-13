@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Athena Agent 安装脚本
+# One-Agent 安装脚本
 # 支持语言：中文(zh) / English(en)  |  默认：中文
 # 用法：bash install.sh          # 中文
 #       bash install.sh en       # 英文
@@ -19,7 +19,7 @@ fi
 declare -A T
 if [[ "$LANG_CODE" == "zh" ]]; then
     T[welcome]="\n  ╔══════════════════════════════════════╗"
-    T[welcome2]="  ║   Athena Agent v2.0 安装向导        ║"
+    T[welcome2]="  ║   One-Agent v2.0 安装向导        ║"
     T[welcome3]="  ╚══════════════════════════════════════╝\n"
     T[lang]="语言: 中文"
     T[check_py]="[1/6] 检查 Python 环境..."
@@ -47,7 +47,7 @@ if [[ "$LANG_CODE" == "zh" ]]; then
     T[smoke]="运行冒烟测试验证安装: python tests/smoke.py\n"
 else
     T[welcome]="\n  ╔══════════════════════════════════════╗"
-    T[welcome2]="  ║   Athena Agent v2.0 Setup Wizard    ║"
+    T[welcome2]="  ║   One-Agent v2.0 Setup Wizard    ║"
     T[welcome3]="  ╚══════════════════════════════════════╝\n"
     T[lang]="Language: English"
     T[check_py]="[1/6] Checking Python..."
