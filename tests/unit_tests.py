@@ -354,6 +354,44 @@ def test_llm_cache_operations():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# 10. Plugin discover
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_plugin_discover():
+    """Test PluginManager.discover() finds plugins from package directories."""
+    from core.plugin import PluginManager
+
+    # Discover plugins from real packages
+    pm = PluginManager.discover(
+        ["router", "memory", "scheduler", "monitor"],
+    )
+    plugins = {p.name for p in pm._plugins}
+    _check("discover router", "router" in plugins)
+    _check("discover memory", "memory" in plugins)
+    _check("discover scheduler", "scheduler" in plugins)
+    _check("discover monitor", "monitoring" in plugins)
+    _check("discover all classes", len(plugins) >= 4, f"got {len(plugins)}: {plugins}")
+
+    # Verify topological ordering works on discovered plugins
+    from core.events import EventBus
+    from core.context import AgentContext
+    bus = EventBus()
+    ctx = AgentContext(
+        config={"agent": {"name": "test", "data_dir": "./data"}},
+        bus=bus,
+        data_dir="./data",
+    )
+    async def run():
+        await bus.start()
+        await pm.setup_all(ctx)
+        await pm.start_all()
+        await pm.stop_all()
+        await bus.stop()
+    asyncio.run(run())
+    _check("discover lifecycle", True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 

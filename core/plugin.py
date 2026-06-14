@@ -85,7 +85,7 @@ def _collect_from_module(
             try:
                 pm.register(attr())
                 logger.debug("auto-discovered plugin: %s", attr.__name__)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 logger.exception("failed to instantiate plugin %s — skipping", attr.__name__)
 
 
@@ -118,20 +118,19 @@ class PluginManager:
         """
         pm = cls()
         exclude_set = set(exclude or [])
-        seen: set[str] = set()
+        seen: set = set()
 
         for pkg_name in package_paths:
-            # First, try to import the package __init__ (in case it defines plugins)
+            # Import the package and scan its __init__ for plugins
             try:
-                pkg_module = importlib.import_module(pkg_name)
-                _collect_from_module(pkg_module, pkg_name, pm, seen, exclude_set)
+                pkg = importlib.import_module(pkg_name)
+                _collect_from_module(pkg, pkg_name, pm, seen, exclude_set)
             except ImportError as exc:
                 logger.warning("could not import package %s: %s", pkg_name, exc)
                 continue
 
             # Then scan the package directory for sub-modules
             try:
-                pkg = importlib.import_module(pkg_name)
                 pkg_path = Path(pkg.__file__).parent
             except Exception as exc:
                 logger.warning("could not resolve path for %s: %s", pkg_name, exc)

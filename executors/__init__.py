@@ -187,7 +187,8 @@ class DockerExecutor(Plugin):
         self._image = "python:3.12-slim"
         self._timeout = 120
         self._mem_limit_mb = 512
-        self._cpu_quota = 50000  # 50% of one CPU
+        self._cpu_quota = 50000
+        self._patterns = ALLOWED_PATTERNS
 
     async def setup(self, ctx) -> None:
         await super().setup(ctx)
