@@ -324,16 +324,17 @@ class OneAgentApp:
     async def chat(self, text: str, source: str = "cli", session_id: str = "default") -> str:
         from core.context import TurnContext
         turn = TurnContext(input_text=text, source=source, session_id=session_id)
+        evt = asyncio.Event()
+        turn.meta["_completion_event"] = evt
         self.bus.publish({
             "type": "user_message",
             "payload": {"turn": turn, "session_id": session_id},
             "source": source,
         })
-        deadline = asyncio.get_event_loop().time() + 180
-        while asyncio.get_event_loop().time() < deadline:
-            if turn.result is not None or turn.error is not None:
-                break
-            await asyncio.sleep(0.1)
+        try:
+            await asyncio.wait_for(evt.wait(), 180)
+        except asyncio.TimeoutError:
+            pass
         return turn.result or "[timeout]"
 
     async def stop(self) -> None:

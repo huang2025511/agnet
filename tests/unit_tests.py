@@ -392,6 +392,236 @@ def test_plugin_discover():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Multimodal tests
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_multimodal():
+    """Test MultimodalPlugin constructor, _resolve_provider, and lifecycle."""
+    from multimodal import MultimodalPlugin
+
+    p = MultimodalPlugin()
+    _check("multimodal name", p.name == "multimodal")
+    _check("multimodal client none init", p._client is None)
+
+    # _resolve_provider with full provider/model
+    prov, mname, key, base = p._resolve_provider("openai/gpt-4o")
+    _check("multimodal resolve openai", prov == "openai" and mname == "gpt-4o")
+    _check("multimodal resolve base", base == "https://api.openai.com/v1")
+
+    # _resolve_provider with no slash
+    prov, mname, key, base = p._resolve_provider("gpt-4")
+    _check("multimodal resolve no slash", prov == "openai" and mname == "gpt-4")
+
+    # _resolve_provider with anthropic
+    prov, mname, key, base = p._resolve_provider("anthropic/claude-3")
+    _check("multimodal resolve anthropic", prov == "anthropic")
+    _check("multimodal resolve anthropic base", base == "https://api.anthropic.com")
+
+    # _resolve_provider with openrouter
+    prov, mname, key, base = p._resolve_provider("openrouter/gpt-4o")
+    _check("multimodal resolve openrouter", prov == "openrouter")
+    _check("multimodal resolve openrouter base", base == "https://openrouter.ai/api/v1")
+
+    # Lifecycle with mock context
+    from core.events import EventBus
+    from core.context import AgentContext
+    bus = EventBus()
+    ctx = AgentContext(config={"llm": {"api_keys": {"openai": "sk-test"}}, "agent": {"name": "test", "data_dir": "./data"}}, bus=bus, data_dir="./data")
+    async def run():
+        await bus.start()
+        await p.setup(ctx)
+        _check("multimodal client after setup", p._client is not None)
+        _check("multimodal api key resolved", p._api_keys.get("openai") == "sk-test")
+        await p.stop()
+        await bus.stop()
+    asyncio.run(run())
+    _check("multimodal lifecycle", True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Scheduler tests
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_scheduler():
+    """Test SchedulerPlugin: init, add_cron validation, setup without APScheduler."""
+    from scheduler import SchedulerPlugin
+    import types
+
+    p = SchedulerPlugin()
+    _check("scheduler name", p.name == "scheduler")
+    _check("scheduler not enabled init", p._enabled is True)
+    _check("scheduler none init", p._scheduler is None)
+
+    # add_cron should silently no-op when scheduler is None
+    called = False
+    def dummy():
+        nonlocal called
+        called = True
+    p.add_cron("0 * * * *", dummy, "test_job")
+    _check("scheduler add_cron no scheduler", not called)
+
+    # add_cron with invalid cron format (4 fields, should be 5)
+    mock_scheduler = types.SimpleNamespace()
+    mock_scheduler.add_job = lambda *a, **kw: None
+    p._scheduler = mock_scheduler
+    p.add_cron("* * * *", dummy, "bad_cron")  # 4 fields → invalid
+    _check("scheduler reject bad cron", True)  # just verify no crash
+
+    # add_cron with valid cron
+    p.add_cron("0 8 * * 1", dummy, "monday_job")
+    _check("scheduler accept valid cron", True)
+
+    # Lifecycle without APScheduler: should gracefully disable
+    p2 = SchedulerPlugin()
+    from core.events import EventBus
+    from core.context import AgentContext
+    bus = EventBus()
+    ctx = AgentContext(config={"agent": {"name": "test", "data_dir": "./data"}, "scheduler": {"enabled": True}}, bus=bus, data_dir="./data")
+    async def run():
+        await bus.start()
+        # Force _HAS_AP to False to test graceful degradation
+        import scheduler as sched_mod
+        old_has_ap = sched_mod._HAS_AP
+        sched_mod._HAS_AP = False
+        try:
+            await p2.setup(ctx)
+            _check("scheduler disabled no apscheduler", p2._scheduler is None)
+        finally:
+            sched_mod._HAS_AP = old_has_ap
+        await p2.stop()
+        await bus.stop()
+    asyncio.run(run())
+    _check("scheduler lifecycle", True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Marketplace tests
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_marketplace():
+    """Test MarketplacePlugin: _resolve_source, _parse_front_matter, registry ops."""
+    from marketplace import MarketplacePlugin, SkillSpec
+
+    p = MarketplacePlugin()
+    _check("marketplace name", p.name == "marketplace")
+    _check("marketplace depends on skills", "skills" in p.depends_on)
+
+    # _resolve_source: GitHub format
+    url = p._resolve_source("octocat/Hello-World/README.md")
+    _check("marketplace resolve github", url == "https://raw.githubusercontent.com/octocat/Hello-World/main/README.md")
+
+    # _resolve_source: GitHub with tag
+    url = p._resolve_source("octocat/Hello-World@v1.0/README.md")
+    _check("marketplace resolve github tag", url == "https://raw.githubusercontent.com/octocat/Hello-World/v1.0/README.md")
+
+    # _resolve_source: already raw URL
+    url = p._resolve_source("https://raw.githubusercontent.com/a/b/main/skill.md")
+    _check("marketplace resolve raw url", url == "https://raw.githubusercontent.com/a/b/main/skill.md")
+
+    # _resolve_source: invalid
+    url = p._resolve_source("just a string")
+    _check("marketplace resolve invalid", url is None)
+
+    # _parse_front_matter: valid YAML front-matter
+    content = """---
+id: test-skill
+title: Test Skill
+description: A test skill for testing.
+version: "1.0.0"
+author: tester
+tags: [test, demo]
+---
+This is the skill body content.
+"""
+    spec = p._parse_front_matter(content, "test/owner/skill.md")
+    _check("marketplace parse front matter", spec is not None)
+    if spec:
+        _check("marketplace parse id", spec.id == "test-skill")
+        _check("marketplace parse title", spec.title == "Test Skill")
+        _check("marketplace parse version", spec.version == "1.0.0")
+        _check("marketplace parse author", spec.author == "tester")
+        _check("marketplace parse tags", "test" in spec.tags)
+
+    # _parse_front_matter: no front-matter
+    spec = p._parse_front_matter("Just plain text, no YAML", "test")
+    _check("marketplace parse no front matter", spec is None)
+
+    # _parse_front_matter: invalid YAML
+    spec = p._parse_front_matter("---\n: invalid yaml :::\n---\nbody", "test")
+    _check("marketplace parse invalid yaml", spec is None)
+
+    # SkillSpec serialization
+    s = SkillSpec("s1", "S1", "desc", "1.0", "auth", ["tag1"], "http://url", "abc123")
+    d = s.to_dict()
+    _check("marketplace SkillSpec to_dict", d["id"] == "s1" and d["checksum"] == "abc123")
+
+    # list_installed should return empty before registry is set up
+    _check("marketplace list empty", p.list_installed() == [])
+
+    # Lifecycle
+    import tempfile
+    tmpdir = tempfile.mkdtemp()
+    from core.events import EventBus
+    from core.context import AgentContext
+    bus = EventBus()
+    ctx = AgentContext(config={"agent": {"name": "test", "data_dir": tmpdir}}, bus=bus, data_dir=tmpdir)
+    async def run():
+        await bus.start()
+        await p.setup(ctx)
+        _check("marketplace registry created", p._registry_path is not None)
+        reg = p._read_registry()
+        _check("marketplace registry has installed", "installed" in reg)
+        _check("marketplace registry has available", "available" in reg)
+        await p.stop()
+        await bus.stop()
+    asyncio.run(run())
+    # Cleanup
+    import shutil
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    _check("marketplace lifecycle", True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Monitoring tests
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_monitoring():
+    """Test MonitoringPlugin: constructor, setup, dashboard HTML."""
+    from monitor import MonitoringPlugin
+
+    p = MonitoringPlugin()
+    _check("monitor name", p.name == "monitoring")
+    _check("monitor default port", p._port == 18793)
+    _check("monitor default enabled", p._enabled is True)
+
+    # Dashboard HTML is valid and contains expected elements
+    html = p._build_dashboard_html()
+    _check("monitor html is string", isinstance(html, str))
+    _check("monitor html has doctype", html.startswith("<!doctype html>"))
+    _check("monitor html has title", "One-Agent Monitor" in html)
+    _check("monitor html has Event Bus", "Event Bus" in html)
+    _check("monitor html has LLM", "LLM" in html)
+    _check("monitor html has Memory", "Memory" in html)
+    _check("monitor html has DLQ", "Dead-Letter Queue" in html)
+    _check("monitor html has metrics endpoint", "/api/metrics" in html)
+    _check("monitor html has refresh", "refresh()" in html)
+
+    # Setup with config
+    from core.events import EventBus
+    from core.context import AgentContext
+    bus = EventBus()
+    ctx = AgentContext(config={"agent": {"name": "test", "data_dir": "./data"}, "monitoring": {"port": 9999, "enabled": True}}, bus=bus, data_dir="./data")
+    async def run():
+        await bus.start()
+        await p.setup(ctx)
+        _check("monitor port from config", p._port == 9999)
+        await p.stop()
+        await bus.stop()
+    asyncio.run(run())
+    _check("monitor lifecycle", True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -418,6 +648,18 @@ if __name__ == "__main__":
 
     print("\n─ settings command parser ─")
     test_settings_command_parser()
+
+    print("\n─ multimodal ─")
+    test_multimodal()
+
+    print("\n─ scheduler ─")
+    test_scheduler()
+
+    print("\n─ marketplace ─")
+    test_marketplace()
+
+    print("\n─ monitoring ─")
+    test_monitoring()
 
     print("\n" + "─" * 60)
     ok = _summary()

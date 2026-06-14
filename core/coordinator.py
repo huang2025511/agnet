@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any, Dict, List, Optional
 
 from core.context import TurnContext
@@ -60,7 +59,12 @@ class Coordinator(Plugin):
         except Exception as exc:  # noqa: BLE001
             logger.exception("coordinator failed")
             turn.record_failure(str(exc))
+        finally:
             self.publish("turn_completed", turn=turn)
+            # Signal any waiter (e.g., external message handler or chat())
+            evt = turn.meta.pop("_completion_event", None)
+            if evt is not None:
+                evt.set()
 
     async def _on_external(self, event: Event) -> None:
         """Handle messages coming from chat platforms.
@@ -71,15 +75,14 @@ class Coordinator(Plugin):
         text = event.get("text") or ""
         session_id = event.get("session_id") or event.get("chat_id") or "ext"
         turn = TurnContext(input_text=text, source=event.get("source", "ext"), session_id=str(session_id))
-        # publish user_message so the router classifies this — routing
-        # publishes turn_routed which eventually reaches _on_routed above.
+        # Use an Event to wait for turn completion instead of polling
+        evt = asyncio.Event()
+        turn.meta["_completion_event"] = evt
         self.publish("user_message", turn=turn, session_id=turn.session_id)
-        # wait until turn.result is populated — small polling loop
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            if turn.result is not None or turn.error is not None:
-                break
-            await asyncio.sleep(0.1)
+        try:
+            await asyncio.wait_for(evt.wait(), 120)
+        except asyncio.TimeoutError:
+            pass
 
     # --------------------------------------------------------- main loop
     async def _run_turn(self, turn: TurnContext) -> None:

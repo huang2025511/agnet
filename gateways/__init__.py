@@ -51,6 +51,90 @@ def _match_cli_intent(text: str) -> Optional[str]:
     return None
 
 
+# ------------- PollingGateway base class ---------------------------------
+class PollingGateway(Plugin):
+    """Base class for polling-based chat platform gateways.
+
+    Provides common lifecycle (sessions, replies, client, task cleanup)
+    and the ``_on_done`` / ``_dispatch_and_wait`` pattern.  Subclasses
+    override ``_poll_loop`` to implement platform-specific polling and
+    ``_send_reply`` to define how messages are sent back.
+    """
+
+    gateway_source: str = ""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._client: Optional[httpx.AsyncClient] = None
+        self._task: Optional[asyncio.Task] = None
+        self._sessions: Dict[str, asyncio.Event] = {}
+        self._replies: Dict[str, str] = {}
+
+    # ----- hook points for subclasses -----
+
+    def _make_client(self) -> httpx.AsyncClient:
+        """Override to customise headers, base URL, timeout."""
+        return httpx.AsyncClient(timeout=30)
+
+    async def _read_config(self, cfg: dict) -> bool:
+        """Override to read gateway-specific config.  Return False to disable."""
+        return True
+
+    async def _poll_loop(self) -> None:
+        """Override to implement platform-specific polling logic."""
+        raise NotImplementedError
+
+    async def _send_reply(self, target: Any, text: str) -> None:
+        """Override to send a reply to the platform."""
+        raise NotImplementedError
+
+    # ----- common lifecycle -----
+
+    async def setup(self, ctx) -> None:
+        await super().setup(ctx)
+
+    async def start(self) -> None:
+        if self._client is not None:
+            self.bus.subscribe("turn_completed", self._on_done)
+            self._task = asyncio.create_task(self._poll_loop())
+        await super().start()
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+        if self._client:
+            await self._client.aclose()
+        await super().stop()
+
+    # ----- session helpers -----
+
+    async def _on_done(self, event) -> None:
+        turn = event.get("turn")
+        if turn is None:
+            return
+        sid = turn.session_id
+        if sid in self._sessions:
+            self._replies[sid] = turn.result or f"[error: {turn.error}]"
+            self._sessions[sid].set()
+
+    async def _dispatch_and_wait(self, msg_key: str, event_data: dict,
+                                  target: Any, timeout: int = 120) -> None:
+        """Publish to bus, wait for reply, send back, cleanup."""
+        evt = asyncio.Event()
+        self._sessions[msg_key] = evt
+        if self.bus is not None:
+            self.bus.publish(event_data)
+        try:
+            await asyncio.wait_for(evt.wait(), timeout)
+            reply = self._replies.get(msg_key, "[no reply]")
+            await self._send_reply(target, reply)
+        except asyncio.TimeoutError:
+            await self._send_reply(target, "[timeout]")
+        finally:
+            self._sessions.pop(msg_key, None)
+            self._replies.pop(msg_key, None)
+
+
 # ------------- CLI --------------------------------------------------------
 class CLIGateway(Plugin):
     """Line-based interactive terminal interface."""
@@ -122,41 +206,37 @@ class CLIGateway(Plugin):
 
 
 # ------------- Telegram ---------------------------------------------------
-class TelegramGateway(Plugin):
+class TelegramGateway(PollingGateway):
     """Minimal long-poll Telegram bot.  Set TELEGRAM_BOT_TOKEN to use."""
 
     name = "gateway_telegram"
+    gateway_source = "telegram"
 
     def __init__(self) -> None:
         super().__init__()
-        self._token: Optional[str] = None
-        self._allowed_users = []
+        self._token: str = ""
+        self._allowed_users: list = []
         self._base = "https://api.telegram.org"
-        self._client: Optional[httpx.AsyncClient] = None
-        self._task: Optional[asyncio.Task] = None
-        self._sessions: Dict[str, asyncio.Event] = {}
-        self._replies: Dict[str, str] = {}
+
+    async def _read_config(self, cfg: dict) -> bool:
+        self._token = cfg.get("bot_token") or ""
+        self._allowed_users = cfg.get("allowed_users") or []
+        if not self._token:
+            return False
+        return True
+
+    def _make_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=30)
 
     async def setup(self, ctx) -> None:
         await super().setup(ctx)
         cfg = (ctx.config.get("gateways") or {}).get("telegram") or {}
-        self._token = cfg.get("bot_token") or ""
-        self._allowed_users = cfg.get("allowed_users") or []
-        if not self._token or not cfg.get("enabled", False):
+        if not cfg.get("enabled", False) or not await self._read_config(cfg):
             logger.info("telegram disabled")
             return
-        self._client = httpx.AsyncClient(timeout=30)
-        self.bus.subscribe("turn_completed", self._on_done)
-        self._task = asyncio.create_task(self._loop())
+        self._client = self._make_client()
 
-    async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-        if self._client:
-            await self._client.aclose()
-        await super().stop()
-
-    async def _loop(self) -> None:
+    async def _poll_loop(self) -> None:
         if not self._client or not self._token:
             return
         offset = 0
@@ -180,54 +260,24 @@ class TelegramGateway(Plugin):
                 if not text or chat_id is None:
                     continue
                 if self._allowed_users and user_id not in self._allowed_users:
-                    await self._send(chat_id, "Sorry, you're not in the allowed list.")
+                    await self._send_reply(chat_id, "Sorry, you're not in the allowed list.")
                     continue
-                session_id = f"tg-{chat_id}"
-                # Use per-message key to avoid race when multiple messages
-                # from the same chat arrive in the same poll batch.
-                msg_key = f"{session_id}-{u.get('update_id')}"
-                event = asyncio.Event()
-                self._sessions[msg_key] = event
-                # dispatch — we rely on something to call into the agent
-                if self.bus is not None:
-                    self.bus.publish({
-                        "type": "external_message",
-                        "source": "telegram",
-                        "session_id": msg_key,
-                        "text": text,
-                        "chat_id": chat_id,
-                    })
-                try:
-                    await asyncio.wait_for(event.wait(), 120)
-                    await self._send(chat_id, self._replies.get(msg_key, "[no reply]"))
-                except asyncio.TimeoutError:
-                    try:
-                        await self._send(chat_id, "[timeout]")
-                    except Exception:
-                        pass
-                except Exception:
-                    logger.exception("telegram send error for chat %s", chat_id)
-                finally:
-                    # always clean up to prevent memory leak regardless of outcome
-                    self._sessions.pop(msg_key, None)
-                    self._replies.pop(msg_key, None)
+                msg_key = f"tg-{chat_id}-{u.get('update_id')}"
+                await self._dispatch_and_wait(msg_key, {
+                    "type": "external_message",
+                    "source": "telegram",
+                    "session_id": msg_key,
+                    "text": text,
+                    "chat_id": chat_id,
+                }, chat_id)
 
-    async def _send(self, chat_id: int, text: str) -> None:
+    async def _send_reply(self, target: Any, text: str) -> None:
         if not self._client or not self._token:
             return
         await self._client.post(
             f"{self._base}/bot{self._token}/sendMessage",
-            json={"chat_id": chat_id, "text": text[:4000]},
+            json={"chat_id": target, "text": text[:4000]},
         )
-
-    async def _on_done(self, event) -> None:
-        turn = event.get("turn")
-        if turn is None:
-            return
-        session_id = turn.session_id
-        if session_id in self._sessions:
-            self._replies[session_id] = turn.result or f"[error: {turn.error}]"
-            self._sessions[session_id].set()
 
 
 # ------------- WeCom (企业微信) -------------------------------------------
@@ -925,204 +975,150 @@ class FeishuGateway(Plugin):
 
 
 # ------------- Discord -----------------------------------------------------
-class DiscordGateway(Plugin):
-    """Discord Bot 网关，通过 Gateway WebSocket 长连接接收消息。
-
-    使用 Discord Bot Token + httpx 轮询方式实现，无需 discord.py 依赖。
-    """
+class DiscordGateway(PollingGateway):
+    """Discord Bot, polling via REST API (no discord.py)."""
 
     name = "gateway_discord"
+    gateway_source = "discord"
 
     def __init__(self) -> None:
         super().__init__()
         self._token: str = ""
         self._allowed_channels: list = []
         self._base = "https://discord.com/api/v10"
-        self._client: Optional[httpx.AsyncClient] = None
-        self._task: Optional[asyncio.Task] = None
-        self._sessions: Dict[str, asyncio.Event] = {}
-        self._replies: Dict[str, str] = {}
+        self._bot_id: str = ""
+
+    async def _read_config(self, cfg: dict) -> bool:
+        self._token = cfg.get("bot_token") or ""
+        self._allowed_channels = [str(c) for c in (cfg.get("allowed_channels") or [])]
+        return bool(self._token)
+
+    def _make_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=30,
+            headers={"Authorization": f"Bot {self._token}", "Content-Type": "application/json"},
+        )
 
     async def setup(self, ctx) -> None:
         await super().setup(ctx)
         cfg = (ctx.config.get("gateways") or {}).get("discord") or {}
-        self._token = cfg.get("bot_token") or ""
-        self._allowed_channels = [str(c) for c in (cfg.get("allowed_channels") or [])]
-        if not self._token or not cfg.get("enabled", False):
+        if not cfg.get("enabled", False) or not await self._read_config(cfg):
             logger.info("discord disabled")
             return
-        self._client = httpx.AsyncClient(
-            timeout=30,
-            headers={"Authorization": f"Bot {self._token}", "Content-Type": "application/json"},
-        )
-        self.bus.subscribe("turn_completed", self._on_done)
-        self._task = asyncio.create_task(self._poll_loop())
-        logger.info("discord gateway enabled")
-
-    async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-        if self._client:
-            await self._client.aclose()
-        await super().stop()
-
-    async def _poll_loop(self) -> None:
-        """通过 Discord REST API 轮询消息（简化实现，无需 WebSocket）。"""
-        # 获取 @me 的信息
+        self._client = self._make_client()
+        # Fetch bot identity
         try:
-            resp = await self._client.get(f"{self._base}/users/@me")  # type: ignore[union-attr]
-            bot_data = resp.json()
-            bot_id = bot_data.get("id", "")
+            resp = await self._client.get(f"{self._base}/users/@me")
+            self._bot_id = resp.json().get("id", "")
         except Exception:
             logger.error("discord: failed to get bot identity")
-            return
 
-        # 获取已加入的频道列表
+    async def _poll_loop(self) -> None:
+        if not self._client or not self._token:
+            return
         last_message_ids: Dict[str, str] = {}
         while True:
             try:
-                # 获取 Bot 所在的 Guilds
-                resp = await self._client.get(f"{self._base}/users/@me/guilds")  # type: ignore[union-attr]
+                resp = await self._client.get(f"{self._base}/users/@me/guilds")
                 guilds = resp.json() or []
                 for guild in guilds:
                     guild_id = guild.get("id", "")
-                    # 获取频道列表
-                    ch_resp = await self._client.get(  # type: ignore[union-attr]
-                        f"{self._base}/guilds/{guild_id}/channels"
-                    )
+                    ch_resp = await self._client.get(f"{self._base}/guilds/{guild_id}/channels")
                     channels = ch_resp.json() or []
                     for ch in channels:
                         ch_id = ch.get("id", "")
-                        ch_type = ch.get("type", 0)
-                        # 只处理文本频道 (type=0)
-                        if ch_type != 0:
+                        if ch.get("type", 0) != 0:
                             continue
                         if self._allowed_channels and ch_id not in self._allowed_channels:
                             continue
-                        # 获取最近消息
                         params = {"limit": 5}
                         if last_message_ids.get(ch_id):
                             params["after"] = last_message_ids[ch_id]
-                        msg_resp = await self._client.get(  # type: ignore[union-attr]
+                        msg_resp = await self._client.get(
                             f"{self._base}/channels/{ch_id}/messages", params=params
                         )
                         messages = list(reversed(msg_resp.json() or []))
                         for msg in messages:
                             author = msg.get("author", {}) or {}
-                            if author.get("id") == bot_id:
-                                continue  # 忽略自己发的消息
+                            if author.get("id") == self._bot_id:
+                                continue
                             text = (msg.get("content") or "").strip()
                             if not text:
                                 continue
                             last_message_ids[ch_id] = msg.get("id", "")
                             msg_key = f"dc-{ch_id}-{msg.get('id')}"
-                            evt = asyncio.Event()
-                            self._sessions[msg_key] = evt
-                            if self.bus is not None:
-                                self.bus.publish({
-                                    "type": "external_message",
-                                    "source": "discord",
-                                    "session_id": msg_key,
-                                    "text": text,
-                                    "chat_id": ch_id,
-                                })
-                            try:
-                                await asyncio.wait_for(evt.wait(), 120)
-                                reply = self._replies.get(msg_key, "[no reply]")
-                                await self._send_message(ch_id, reply)
-                            except asyncio.TimeoutError:
-                                await self._send_message(ch_id, "[timeout]")
-                            finally:
-                                self._sessions.pop(msg_key, None)
-                                self._replies.pop(msg_key, None)
-                        # 更新 last_message_id
+                            await self._dispatch_and_wait(msg_key, {
+                                "type": "external_message",
+                                "source": "discord",
+                                "session_id": msg_key,
+                                "text": text,
+                                "chat_id": ch_id,
+                            }, ch_id)
                         if messages:
                             last_message_ids[ch_id] = messages[-1].get("id", last_message_ids.get(ch_id, ""))
             except Exception as exc:
                 logger.warning("discord poll error: %s", exc)
             await asyncio.sleep(3)
 
-    async def _send_message(self, channel_id: str, text: str) -> None:
+    async def _send_reply(self, target: Any, text: str) -> None:
         if not self._client:
             return
-        try:
-            await self._client.post(
-                f"{self._base}/channels/{channel_id}/messages",
-                json={"content": text[:2000]},
-            )
-        except Exception as exc:
-            logger.warning("discord send failed: %s", exc)
-
-    async def _on_done(self, event) -> None:
-        turn = event.get("turn")
-        if turn is None:
-            return
-        sid = turn.session_id
-        if sid in self._sessions:
-            self._replies[sid] = turn.result or f"[error: {turn.error}]"
-            self._sessions[sid].set()
+        await self._client.post(
+            f"{self._base}/channels/{target}/messages",
+            json={"content": text[:2000]},
+        )
 
 
 # ------------- Slack -------------------------------------------------------
-class SlackGateway(Plugin):
-    """Slack Bot 网关，通过 Socket Mode 长连接接收消息。
-
-    使用 Slack Web API + httpx 实现，无需 slack-sdk 依赖。
-    """
+class SlackGateway(PollingGateway):
+    """Slack Bot, polling via Web API (no slack-sdk)."""
 
     name = "gateway_slack"
+    gateway_source = "slack"
 
     def __init__(self) -> None:
         super().__init__()
-        self._token: str = ""          # xoxb-...
-        self._app_token: str = ""      # xapp-... (Socket Mode)
+        self._token: str = ""
+        self._app_token: str = ""
         self._allowed_channels: list = []
         self._base = "https://slack.com/api"
-        self._client: Optional[httpx.AsyncClient] = None
-        self._task: Optional[asyncio.Task] = None
-        self._sessions: Dict[str, asyncio.Event] = {}
-        self._replies: Dict[str, str] = {}
         self._bot_user_id: str = ""
+
+    async def _read_config(self, cfg: dict) -> bool:
+        self._token = cfg.get("bot_token") or ""
+        self._app_token = cfg.get("app_token") or ""
+        self._allowed_channels = [str(c) for c in (cfg.get("allowed_channels") or [])]
+        return bool(self._token)
+
+    def _make_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=30,
+            headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"},
+        )
 
     async def setup(self, ctx) -> None:
         await super().setup(ctx)
         cfg = (ctx.config.get("gateways") or {}).get("slack") or {}
-        self._token = cfg.get("bot_token") or ""
-        self._app_token = cfg.get("app_token") or ""
-        self._allowed_channels = [str(c) for c in (cfg.get("allowed_channels") or [])]
-        if not self._token or not cfg.get("enabled", False):
+        if not cfg.get("enabled", False) or not await self._read_config(cfg):
             logger.info("slack disabled")
             return
-        self._client = httpx.AsyncClient(
-            timeout=30,
-            headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"},
-        )
-        # 获取 Bot User ID
+        self._client = self._make_client()
         try:
             resp = await self._client.get(f"{self._base}/auth.test")
-            data = resp.json()
-            self._bot_user_id = data.get("user_id", "")
+            self._bot_user_id = resp.json().get("user_id", "")
         except Exception:
             pass
-        self.bus.subscribe("turn_completed", self._on_done)
-        self._task = asyncio.create_task(self._poll_loop())
-        logger.info("slack gateway enabled")
-
-    async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-        if self._client:
-            await self._client.aclose()
-        await super().stop()
 
     async def _poll_loop(self) -> None:
-        """通过 RTM-like 轮询获取消息（简化实现）。"""
+        if not self._client:
+            return
         last_ts: Dict[str, str] = {}
         while True:
             try:
-                # 获取频道列表
-                resp = await self._client.get(f"{self._base}/conversations.list",  # type: ignore[union-attr]
-                    params={"types": "public_channel,private_channel", "limit": 100})
+                resp = await self._client.get(
+                    f"{self._base}/conversations.list",
+                    params={"types": "public_channel,private_channel", "limit": 100},
+                )
                 channels = (resp.json().get("channels") or [])
                 for ch in channels:
                     ch_id = ch.get("id", "")
@@ -1133,7 +1129,7 @@ class SlackGateway(Plugin):
                     params: Dict[str, Any] = {"channel": ch_id, "limit": 5}
                     if last_ts.get(ch_id):
                         params["oldest"] = last_ts[ch_id]
-                    msg_resp = await self._client.get(  # type: ignore[union-attr]
+                    msg_resp = await self._client.get(
                         f"{self._base}/conversations.history", params=params
                     )
                     messages = list(reversed(msg_resp.json().get("messages") or []))
@@ -1147,50 +1143,26 @@ class SlackGateway(Plugin):
                             continue
                         last_ts[ch_id] = ts
                         msg_key = f"sl-{ch_id}-{ts}"
-                        evt = asyncio.Event()
-                        self._sessions[msg_key] = evt
-                        if self.bus is not None:
-                            self.bus.publish({
-                                "type": "external_message",
-                                "source": "slack",
-                                "session_id": msg_key,
-                                "text": text,
-                                "chat_id": ch_id,
-                            })
-                        try:
-                            await asyncio.wait_for(evt.wait(), 120)
-                            reply = self._replies.get(msg_key, "[no reply]")
-                            await self._send_message(ch_id, reply)
-                        except asyncio.TimeoutError:
-                            await self._send_message(ch_id, "[timeout]")
-                        finally:
-                            self._sessions.pop(msg_key, None)
-                            self._replies.pop(msg_key, None)
+                        await self._dispatch_and_wait(msg_key, {
+                            "type": "external_message",
+                            "source": "slack",
+                            "session_id": msg_key,
+                            "text": text,
+                            "chat_id": ch_id,
+                        }, ch_id)
                     if messages:
                         last_ts[ch_id] = messages[-1].get("ts", last_ts.get(ch_id, ""))
             except Exception as exc:
                 logger.warning("slack poll error: %s", exc)
             await asyncio.sleep(3)
 
-    async def _send_message(self, channel: str, text: str) -> None:
+    async def _send_reply(self, target: Any, text: str) -> None:
         if not self._client:
             return
-        try:
-            await self._client.post(
-                f"{self._base}/chat.postMessage",
-                json={"channel": channel, "text": text[:4000]},
-            )
-        except Exception as exc:
-            logger.warning("slack send failed: %s", exc)
-
-    async def _on_done(self, event) -> None:
-        turn = event.get("turn")
-        if turn is None:
-            return
-        sid = turn.session_id
-        if sid in self._sessions:
-            self._replies[sid] = turn.result or f"[error: {turn.error}]"
-            self._sessions[sid].set()
+        await self._client.post(
+            f"{self._base}/chat.postMessage",
+            json={"channel": target, "text": text[:4000]},
+        )
 
 
 # ------------- Web UI (FastAPI) -------------------------------------------
@@ -1213,6 +1185,8 @@ class WebGateway(Plugin):
         self._host = cfg.get("host", self._host)
         self._port = int(cfg.get("port", self._port))
         self._enabled = bool(cfg.get("enabled", True))
+        self._auth_required = bool(cfg.get("auth_required", False))
+        self._api_key = cfg.get("api_key") or ""
         if not self._enabled:
             return
 
@@ -1224,12 +1198,34 @@ class WebGateway(Plugin):
             return
         try:
             import uvicorn  # type: ignore
-            from fastapi import FastAPI  # type: ignore
-            from fastapi.responses import HTMLResponse  # type: ignore
+            from fastapi import FastAPI, Request  # type: ignore
+            from fastapi.responses import HTMLResponse, JSONResponse  # type: ignore
         except Exception:
             logger.warning("fastapi/uvicorn not installed — web UI disabled")
             return
         app = FastAPI(title="One-Agent")
+
+        # CORS: restrict to localhost origins only
+        from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[f"http://localhost:{self._port}", f"http://127.0.0.1:{self._port}"],
+            allow_credentials=False,
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+        )
+
+        # Auth middleware
+        _auth_required = self._auth_required
+        _api_key = self._api_key
+
+        @app.middleware("http")
+        async def auth_middleware(request: Request, call_next):
+            if _auth_required and _api_key and request.url.path == "/api/chat":
+                if request.headers.get("X-API-Key") != _api_key:
+                    return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return await call_next(request)
+
         ui_html = Path(__file__).with_name("index.html")
         if ui_html.exists():
             @app.get("/", response_class=HTMLResponse)

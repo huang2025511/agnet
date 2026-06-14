@@ -82,9 +82,9 @@ class RESTAPIGateway(Plugin):
         )
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=["http://localhost:18791", "http://127.0.0.1:18791"],
             allow_credentials=False,
-            allow_methods=["*"],
+            allow_methods=["GET", "POST"],
             allow_headers=["*"],
         )
 
