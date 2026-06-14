@@ -15,7 +15,6 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 from core.plugin import Plugin
 
@@ -45,7 +44,7 @@ class MonitoringPlugin(Plugin):
         if not self._enabled:
             return
         try:
-            from fastapi import FastAPI, HTTPException
+            from fastapi import FastAPI
             from fastapi.responses import HTMLResponse
         except ImportError:
             logger.warning("fastapi not installed — monitoring dashboard disabled")

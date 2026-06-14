@@ -7,9 +7,7 @@ plugins to register jobs, plus reads jobs from a YAML file at boot.
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 try:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore

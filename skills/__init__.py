@@ -11,8 +11,6 @@ The SkillManager exposes them uniformly as tools consumable by the LLM.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
 import re
@@ -300,7 +298,6 @@ class SkillManager(Plugin):
             - 修改: "把模型改成GPT-4" / "设置温度为0.7" / "开启Docker"
             - 列出: "列出所有设置" / "show all settings"
             """
-            import yaml
             input_text = str(args.get("input", "")).strip()
             if not input_text:
                 return "请说明要查看或修改的设置，例如：'查看模型'、'把温度改为0.7'"
@@ -487,7 +484,6 @@ def _parse_value(text: str, value_type: type):
 
 def _process_settings_command(input_text: str, config: dict) -> str:
     """解析自然语言设置命令，读取或修改配置。"""
-    import yaml
 
     lower = input_text.lower()
 

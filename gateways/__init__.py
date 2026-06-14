@@ -854,7 +854,7 @@ class FeishuGateway(Plugin):
 
     async def _start_callback_server(self) -> None:
         try:
-            from fastapi import FastAPI, Request, Response
+            from fastapi import FastAPI, Request
             import uvicorn
         except ImportError:
             logger.warning("fastapi not installed — feishu callback disabled")
@@ -1226,7 +1226,6 @@ class WebGateway(Plugin):
             import uvicorn  # type: ignore
             from fastapi import FastAPI  # type: ignore
             from fastapi.responses import HTMLResponse  # type: ignore
-            from fastapi.staticfiles import StaticFiles  # type: ignore
         except Exception:
             logger.warning("fastapi/uvicorn not installed — web UI disabled")
             return

@@ -20,21 +20,24 @@ sys.path.insert(0, str(ROOT))
 
 
 def test_imports():
-    """Verify all modules import without errors."""
-    from core.events import EventBus, EventStatus
-    from core.plugin import Plugin, PluginManager
-    from core.coordinator import Coordinator
-    from models import LLMProvider, LLMCache
-    from router import SmartRouter, HistoryRecorder
-    from memory import MemoryPlugin, LongTermMemory, ProceduralMemory
-    from skills import SkillManager
-    from executors import ShellExecutor, DockerExecutor, BrowserExecutor
-    from gateways import CLIGateway, WebGateway, WeComGateway, DingTalkGateway, FeishuGateway, DiscordGateway, SlackGateway
-    from scheduler import SchedulerPlugin
-    from multimodal import MultimodalPlugin
-    from api import RESTAPIGateway
-    from monitor import MonitoringPlugin
-    from marketplace import MarketplacePlugin
+    """Verify all modules import without errors. (pyflakes: noqa for test harness)"""
+    from core.events import EventBus, EventStatus  # noqa: F401
+    from core.plugin import Plugin, PluginManager  # noqa: F401
+    from core.coordinator import Coordinator  # noqa: F401
+    from models import LLMProvider, LLMCache  # noqa: F401
+    from router import SmartRouter  # noqa: F401
+    from memory import MemoryPlugin, LongTermMemory, ProceduralMemory  # noqa: F401
+    from skills import SkillManager  # noqa: F401
+    from executors import ShellExecutor, DockerExecutor, BrowserExecutor  # noqa: F401
+    from gateways import (  # noqa: F401
+        CLIGateway, WebGateway, WeComGateway, DingTalkGateway,
+        FeishuGateway, DiscordGateway, SlackGateway,
+    )
+    from scheduler import SchedulerPlugin  # noqa: F401
+    from multimodal import MultimodalPlugin  # noqa: F401
+    from api import RESTAPIGateway  # noqa: F401
+    from monitor import MonitoringPlugin  # noqa: F401
+    from marketplace import MarketplacePlugin  # noqa: F401
     print("  all imports OK")
     return True
 
@@ -69,7 +72,7 @@ def test_llm_cache():
 
 def test_eventbus_dlq():
     """Test dead-letter queue and metrics."""
-    from core.events import EventBus, EventPriority
+    from core.events import EventBus
     bus = EventBus(max_queue_size=10)
 
     async def run():

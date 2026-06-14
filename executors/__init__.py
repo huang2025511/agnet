@@ -13,12 +13,11 @@ Enhanced with:
 from __future__ import annotations
 
 import logging
-import os
 import shlex
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import httpx
 
@@ -235,7 +234,7 @@ class DockerExecutor(Plugin):
             cmd_parts = shlex.split(command, posix=True)
         except ValueError:
             return {
-                "stdout": "", "stderr": f"[parse error: cannot split command]",
+                "stdout": "", "stderr": "[parse error: cannot split command]",
                 "returncode": -3, "blocked": True,
             }
         args = [

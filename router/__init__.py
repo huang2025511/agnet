@@ -120,9 +120,16 @@ class SmartRouter(Plugin):
         })
         if len(self._history) > 5000:
             self._history = self._history[-5000:]
-        # TODO: dynamic threshold adjustment — keep a rolling mean of
-        # "failures per tier" and bump up complexity thresholds when a tier
-        # sees repeated failures.  Good enough for OSS v1.
+
+        # Dynamic threshold adjustment: every ~50 routed turns, evaluate
+        # per-tier failure rate and nudge thresholds accordingly.
+        self_evo_cfg = self._cfg.get("self_evolution", {}) or {}
+        if not self_evo_cfg.get("enabled", True):
+            return
+        total_routed = sum(s["picked"] for s in self._tier_stats.values())
+        eval_interval = self_evo_cfg.get("eval_interval", 50)
+        if total_routed > 0 and total_routed % eval_interval == 0:
+            self._adjust_thresholds()
 
     async def _on_done(self, event: Event) -> None:
         turn: TurnContext | None = event.get("turn")
@@ -180,6 +187,65 @@ class SmartRouter(Plugin):
         if c < thresholds.get("complex", 0.8):
             return "complex"
         return "expert"
+
+    def _adjust_thresholds(self) -> None:
+        """Self-evolution: adjust complexity thresholds based on per-tier failure rates.
+
+        Uses a rolling window of recent turn outcomes to detect when a tier
+        is underperforming (too many failures) or overperforming (could handle
+        more complex tasks), and nudges thresholds by small increments.
+        """
+        thresholds = self._cfg.setdefault("task_complexity_thresholds", {})
+        # Ensure defaults exist
+        thresholds.setdefault("trivial", 0.2)
+        thresholds.setdefault("simple", 0.5)
+        thresholds.setdefault("complex", 0.8)
+
+        # Analyse recent history (last 200 turns) for failure rates per tier
+        recent = self._history[-200:]
+        if len(recent) < 30:
+            return  # not enough data to make statistically meaningful adjustments
+
+        tier_order = ["trivial", "simple", "complex", "expert"]
+        failures: Dict[str, int] = {t: 0 for t in tier_order}
+        total: Dict[str, int] = {t: 0 for t in tier_order}
+        for entry in recent:
+            # Determine which tier was originally picked based on complexity
+            c = entry["complexity"]
+            if c is None:
+                continue
+            tier = self._tier_for_complexity(c)
+            total[tier] += 1
+            if entry["failed"]:
+                failures[tier] += 1
+
+        # Adjust thresholds for each non-expert tier
+        for i, tier in enumerate(tier_order[:-1]):  # skip expert (no upper tier)
+            if total[tier] == 0:
+                continue
+            failure_rate = failures[tier] / total[tier]
+            step = self._cfg.get("self_evolution", {}).get("threshold_step", 0.02)
+            ceiling = self._cfg.get("self_evolution", {}).get("threshold_ceiling", 0.9)
+            floor = self._cfg.get("self_evolution", {}).get("threshold_floor", 0.1)
+
+            if failure_rate > 0.25:
+                # High failure rate → lower the threshold so fewer tasks hit this tier
+                new_val = max(thresholds[tier] - step, floor)
+                if new_val != thresholds[tier]:
+                    logger.info(
+                        "router self-evo: lowering %s threshold %.2f→%.2f (failure rate=%.0f%%)",
+                        tier, thresholds[tier], new_val, failure_rate * 100,
+                    )
+                    thresholds[tier] = new_val
+            elif failure_rate < 0.03:
+                # Low failure rate → raise the threshold so more tasks hit this tier
+                new_val = min(thresholds[tier] + step, ceiling)
+                if new_val != thresholds[tier]:
+                    logger.info(
+                        "router self-evo: raising %s threshold %.2f→%.2f (failure rate=%.0f%%)",
+                        tier, thresholds[tier], new_val, failure_rate * 100,
+                    )
+                    thresholds[tier] = new_val
 
     def _token_budget_for(self, tier: str) -> int:
         return {"trivial": 512, "simple": 1024, "complex": 2048, "expert": 4096}[tier]

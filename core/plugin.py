@@ -15,9 +15,8 @@ from __future__ import annotations
 
 import importlib
 import logging
-import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Optional, Type
+from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
     from core.context import AgentContext

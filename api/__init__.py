@@ -21,9 +21,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional
-
-import httpx
+from typing import Dict, Optional
 
 from core.plugin import Plugin
 
